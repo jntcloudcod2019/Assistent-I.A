@@ -1,0 +1,159 @@
+@import 'tailwindcss';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/700.css';
+
+@theme {
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Paleta do holograma */
+  --color-void: #02080d;
+  --color-abyss: #04121b;
+  --color-holo-50: #eafcff;
+  --color-holo-100: #b8f5ff;
+  --color-holo-200: #7febff;
+  --color-holo-300: #3ddaf5;
+  --color-holo-400: #16c0e0;
+  --color-holo-500: #0a9dbd;
+  --color-holo-600: #077a94;
+  --color-holo-700: #08596b;
+  --color-amber: #ffb547;
+  --color-alert: #ff5470;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-void);
+    color: var(--color-holo-100);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: var(--color-holo-400);
+    color: var(--color-void);
+  }
+
+  /* Scrollbars discretas, no tom do HUD */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-holo-700) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-holo-700);
+    border-radius: 3px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer utilities {
+  .hud-panel {
+    background: color-mix(in oklab, var(--color-abyss) 55%, transparent);
+    backdrop-filter: blur(14px);
+    border: 1px solid color-mix(in oklab, var(--color-holo-400) 22%, transparent);
+    box-shadow:
+      inset 0 0 24px color-mix(in oklab, var(--color-holo-400) 6%, transparent),
+      0 8px 40px rgb(0 0 0 / 0.5);
+  }
+
+  .hud-label {
+    font-size: 9px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--color-holo-300) 62%, transparent);
+  }
+
+  .text-glow {
+    text-shadow: 0 0 12px color-mix(in oklab, var(--color-holo-300) 55%, transparent);
+  }
+
+  /* Varredura de scanlines sobre toda a tela */
+  .scanlines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0 2px,
+      rgb(0 0 0 / 0.28) 2px 4px
+    );
+    mix-blend-mode: multiply;
+    opacity: 0.5;
+  }
+
+  .vignette::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 35%, rgb(0 0 0 / 0.75) 100%);
+  }
+}
+
+@keyframes alan-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes alan-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes alan-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(200%);
+  }
+}
+
+.animate-pulse-soft {
+  animation: alan-pulse 2s ease-in-out infinite;
+}
+.animate-rise {
+  animation: alan-rise 0.35s ease-out both;
+}
+.animate-sweep {
+  animation: alan-sweep 2.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-soft,
+  .animate-rise,
+  .animate-sweep {
+    animation: none;
+  }
+}
