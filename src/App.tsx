@@ -1,6 +1,5 @@
 import { HolographicRings } from '@/components/ai/HolographicRings'
-import { ChatPanel } from '@/components/ui/ChatPanel'
-import { CommandBar } from '@/components/ui/CommandBar'
+import { ConsoleWindow } from '@/components/ui/ConsoleWindow'
 import { HologramScene } from './three/HologramScene'
 
 export function App() {
@@ -15,15 +14,9 @@ export function App() {
         <HologramScene />
       </div>
 
-      {/* Conversa à direita no desktop; no mobile ela desce e o holograma sobe. */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-center gap-3 p-3 sm:p-5 lg:inset-y-0 lg:left-auto lg:right-0 lg:w-[380px] lg:justify-end">
-        <div className="pointer-events-auto w-full">
-          <ChatPanel />
-        </div>
-        <div className="pointer-events-auto w-full">
-          <CommandBar />
-        </div>
-      </div>
+      {/* A janela se posiciona sozinha e é arrastável — por isso sai daqui
+          qualquer container de layout: quem manda na posição é ela. */}
+      <ConsoleWindow />
     </div>
   )
 }

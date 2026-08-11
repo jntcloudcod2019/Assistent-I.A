@@ -1,0 +1,37 @@
+{
+  "name": "alan/classify",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alan/classify",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "c2b8d3f1-0001-4b20-8e02-alanclasswbh",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "c2b8d3f1-0001-4b20-8e02-alanclasswbh"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Decide onde a conversa mora. O servidor lê apenas `{ tier }`.\n//\n//   1 — nada é gravado\n//   2 — Redis com TTL (curto prazo)\n//   3 — MongoDB (permanente)\n//\n// Heurística de propósito: isto roda uma vez por conversa nova, dentro de um\n// timeout de 10s no servidor. Determinístico, sem custo e sem credencial —\n// troque por um nó de LLM quando a classificação precisar de nuance.\n\nconst text = String($input.first().json.body?.text ?? '').toLowerCase().trim()\n\n// Pedido explícito de lembrar algo além da sessão.\n//\n// Palavras soltas levam \\b; frases, não. `\\b` depois de `é` nunca casa —\n// acentuada não é caractere de palavra em regex JS, então não existe fronteira\n// entre `é` e o espaço, e \"meu nome é Jonathan\" escapava para o nível 2.\nconst durable = /\\b(lembre|lembra|lembrar|anote|anota|guarde|guarda|memorize|prefiro)\\b|meu nome é|me chamo|sempre que|de agora em diante|daqui em diante|nunca mais/\n\n// Saudação ou agradecimento solto: não há contexto que valha guardar.\nconst throwaway = /^(oi|olá|ola|e aí|bom dia|boa tarde|boa noite|teste|testando|obrigado|obrigada|valeu|tchau)\\b[\\s!.?]*$/\n\nconst tier = durable.test(text) ? 3 : throwaway.test(text) ? 1 : 2\n\nreturn [{ json: { tier } }]"
+      },
+      "id": "c2b8d3f1-0002-4b20-8e02-alanclasscod",
+      "name": "Classificar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Classificar", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

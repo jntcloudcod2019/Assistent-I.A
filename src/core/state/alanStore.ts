@@ -48,6 +48,8 @@ interface AlanState {
   setTtsSupported: (supported: boolean) => void
 
   addUserMessage: (text: string) => string
+  /** Substitui a conversa inteira — usado ao abrir uma sessão salva. */
+  loadMessages: (messages: Message[]) => void
   startAlanMessage: () => string
   appendToMessage: (id: string, chunk: string) => void
   finishMessage: (id: string) => void
@@ -107,6 +109,10 @@ export const useAlanStore = create<AlanState>((set) => ({
     }))
     return id
   },
+
+  // Limpa passo e transcrição parcial junto: são estado do turno anterior e
+  // ficariam pendurados sobre a conversa recém-aberta.
+  loadMessages: (messages) => set({ messages, steps: [], interim: '', phase: 'idle' }),
 
   startAlanMessage: () => {
     const id = uid('a')

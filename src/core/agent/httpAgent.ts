@@ -67,6 +67,22 @@ export class HttpAgent implements AgentClient {
     this.conversationId = null
   }
 
+  /**
+   * Retoma uma conversa anterior.
+   *
+   * Sem isto, reabrir uma sessão salva mostraria o histórico na tela mas
+   * começaria do zero para o servidor — o ALAN releria as próprias mensagens
+   * como se nunca as tivesse dito.
+   */
+  resume(conversationId: string | null) {
+    this.conversationId = conversationId
+  }
+
+  /** Id atual, para a sessão guardar junto com as mensagens. */
+  get currentConversationId(): string | null {
+    return this.conversationId
+  }
+
   async *send(prompt: string, signal: AbortSignal): AsyncIterable<AgentEvent> {
     let response: Response
     try {

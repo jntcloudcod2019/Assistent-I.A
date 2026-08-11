@@ -1,0 +1,61 @@
+{
+  "name": "alan/chat",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alan/chat",
+        "responseMode": "streaming",
+        "options": {}
+      },
+      "id": "b1a7c2e0-0001-4a10-9f01-alanchatwebh",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "b1a7c2e0-0001-4a10-9f01-alanchatwebh"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ ($json.body.history || []).map(m => (m.role === 'user' ? 'Usuário' : 'ALAN') + ': ' + m.content).join('\\n') }}\n\nUsuário: {{ $json.body.userText }}",
+        "options": {
+          "systemMessage": "Você é o ALAN — Assistente Linguístico e Analítico Neurodigital.\n\nResponda sempre em português do Brasil, em tom direto e conciso. Sua fala é convertida em áudio e anima o rosto do avatar, então:\n- Escreva para ser ouvido: frases curtas, sem listas com marcadores, sem markdown, sem emoji.\n- Não descreva formatação (\"em negrito\", \"item um\").\n- Números e siglas por extenso quando a leitura em voz alta ficar melhor assim.\n\nO histórico acima é a conversa até agora; use-o para manter continuidade.",
+          "enableStreaming": true
+        }
+      },
+      "id": "b1a7c2e0-0002-4a10-9f01-alanchatagnt",
+      "name": "ALAN",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-opus-5"
+        },
+        "options": {
+          "maxTokensToSample": 1024
+        }
+      },
+      "id": "b1a7c2e0-0003-4a10-9f01-alanchatmodl",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.5,
+      "position": [180, 200]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "ALAN", "type": "main", "index": 0 }]]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [[{ "node": "ALAN", "type": "ai_languageModel", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

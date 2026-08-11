@@ -19,7 +19,7 @@ export interface StoredMessage {
 }
 
 export interface ConversationStore {
-  readonly kind: 'mongo' | 'memory'
+  readonly kind: 'mongo' | 'memory' | 'redis' | 'tiered'
   createConversation(title: string): Promise<string>
   appendMessage(input: {
     conversationId: string
