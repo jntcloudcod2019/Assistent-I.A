@@ -107,6 +107,12 @@ export const HEAD_VERT = /* glsl */ `
   uniform float uPixelRatio;
   /** Deve espelhar EYE_ASPECT em faceModel.ts. */
   uniform float uEyeAspect;
+
+  // Canais de expressão, alimentados por core/speech/speak.ts
+  uniform float uBrow;
+  uniform float uSquint;
+  uniform float uSmile;
+  uniform float uMouthWide;
   /** 0 = olhos abertos, 1 = pálpebra totalmente fechada. */
   uniform float uBlink;
 
@@ -115,8 +121,11 @@ export const HEAD_VERT = /* glsl */ `
   varying float vBright;
   varying float vRegion;
   varying float vAlpha;
+  /** Fração do brilho que vem do fundo branco, e não do anel colorido. */
+  varying float vWhite;
 
   void main() {
+    vWhite = 0.0;
     vec3 p = deform(position, aNormal, aSeed);
 
     float rv = revealAmount(aSeed);
@@ -165,16 +174,19 @@ export const HEAD_VERT = /* glsl */ `
     // escorrega para fora da íris nas laterais.
     float ang = aSeed * 6.2831;
     float phi = atan(sin(ang), cos(ang) * uEyeAspect);
-    vec2 pol = vec2(cos(phi), sin(phi)) * aDetail;
-    vec2 gd = pol - vec2(-0.32, 0.34);
-    float glint = exp(-42.0 * dot(gd, gd));
+
+    // Respiração do fundo do olho — lenta o bastante para ler como luz viva,
+    // não como piscada de LED.
+    float eyePulse = 0.5 + 0.5 * sin(uTime * 1.45);
 
     // Piscada. aDetail é o raio isotrópico da íris, então a altura do ponto
     // dentro da fenda precisa ser desfeita do fator de aspecto antes de saber
     // quem já ficou debaixo da pálpebra.
     float kIso = length(vec2(cos(ang) * uEyeAspect, sin(ang)));
     float dvN = sin(ang) * (aDetail / max(kIso, 1e-4));   // -1 topo, +1 base
-    float lidEdge = mix(-1.25, 1.25, uBlink);
+    // O apertar de olhos compartilha o mecanismo da piscada, mas nunca fecha
+    // por completo — é sustentado, não um evento.
+    float lidEdge = mix(-1.25, 1.25, max(uBlink, uSquint * 0.5));
     float covered = 1.0 - smoothstep(lidEdge - 0.06, lidEdge + 0.06, dvN);
     // Linha de cílios acompanhando a borda da pálpebra.
     float lashDist = (dvN - lidEdge) * 26.0;
@@ -186,51 +198,65 @@ export const HEAD_VERT = /* glsl */ `
     // íris não vaze por cima da pálpebra fechada.
     float regionOut = r;
 
-    if (r > 8.5) {                                       // pálpebra
-      vBright *= 0.1;
-      sizeScale = 1.15;
+    if (r > 9.5) {                                       // circuito do crânio
+      // Um pulso viaja pela trilha: o dado percorrendo a placa.
+      float travel = fract(aDetail * 3.0 - uTime * 0.35);
+      vBright = max(vBright, 0.85 + smoothstep(0.86, 1.0, travel) * 1.1);
+      sizeScale = 1.1;
+    } else if (r > 8.5) {                                // contorno da pálpebra
+      // Traço aceso: é ele que dá a forma física do olho, já que o anel
+      // holográfico por si só não define abertura nenhuma.
+      vBright = max(vBright, 0.95);
+      sizeScale = 1.1;
     } else if (r > 7.5) {                                // narina
       vBright *= 0.1;
     } else if (r > 6.5) {                                // sobrancelha
       // Na referência as sobrancelhas são arcos ACESOS, não sombras — é o que
       // dá idade e expressão ao rosto. Piso alto com granulação por pelo.
       vBright = max(vBright, 0.85 + hash11(aSeed * 29.0) * 0.55);
+      // Levantar a sobrancelha é o gesto que mais carrega intenção no rosto.
+      p.y += uBrow * 0.024;
       sizeScale = 1.35;
     } else if (r > 5.5) {                                // linha da boca
       vBright *= 0.06;
-    } else if (r > 4.5) {                                // pupila — núcleo do mecanismo
-      // Na referência o centro não é preto: é o ponto mais incandescente.
-      float rad = aDetail;
-      float core = exp(-rad * 7.0) * 1.1;
-      float innerRing = smoothstep(0.72, 1.0, abs(fract(rad * 9.0) - 0.5) * 2.0);
-      vBright = mix(0.3 + core + innerRing * 0.45 + glint * 1.2, lidShade, covered);
+    } else if (r > 4.5) {                                // pupila
+      // Escura, mas não morta: um resíduo do fundo branco sangra por ela, o
+      // que dá a leitura de globo iluminado em vez de furo.
+      float glowBase = 0.06 + eyePulse * 0.05;
+      vBright = mix(glowBase, lidShade, covered);
+      vWhite = 1.0 - covered;
       regionOut = mix(r, 0.0, step(0.5, covered));
-      sizeScale = 1.35;
-    } else if (r > 3.5) {                                // íris — diafragma mecânico
+      sizeScale = 1.0;
+    } else if (r > 3.5) {                                // anel holográfico
       float rad = aDetail;
+      float turn = phi / 6.2831;
 
-      // Anéis concêntricos: acende a aresta de cada anel, não o seu miolo.
-      float ringPhase = rad * 4.6;
-      float band = floor(ringPhase);
-      float ringLine = smoothstep(0.72, 1.0, abs(fract(ringPhase) - 0.5) * 2.0);
+      // Fundo branco fluorescente, com respiração lenta.
+      float whiteBase = 0.34 + eyePulse * 0.2;
 
-      // Arcos segmentados, cada anel girando em sentido e ritmo próprios — é o
-      // que faz ler como mecanismo de diafragma em vez de textura orgânica.
-      float dir = mod(band, 2.0) * 2.0 - 1.0;
-      float spin = uTime * (0.3 + band * 0.12) * dir;
-      float seg = step(0.32, fract(phi / 6.2831 * (5.0 + band * 3.0) + spin));
+      // Anel principal: uma faixa fina e acesa, não um disco preenchido.
+      float mainRing = exp(-pow((rad - 0.66) * 13.0, 2.0)) * 1.35;
 
-      // Marcas radiais junto ao limbo, como escala de instrumento.
-      float ticks = step(0.8, fract(phi / 6.2831 * 44.0)) * smoothstep(0.95, 1.22, rad);
+      // Anel externo segmentado, girando num sentido.
+      float segOuter = step(0.3, fract(turn * 7.0 + uTime * 0.34));
+      float outer = exp(-pow((rad - 1.16) * 15.0, 2.0)) * segOuter * 1.05;
 
-      // Teto de brilho baixo por necessidade cromática: o roxo tem o azul já em
-      // 1.0, então qualquer ganho acima de ~1.2 satura o canal e o olho volta a
-      // ser um ponto branco — foi o que aconteceu com o azul antes.
-      float limbal = smoothstep(1.12, 1.3, rad);
-      float iris = (0.2 + ringLine * seg * 0.8 + ticks * 0.55) * (1.0 - limbal * 0.6) + glint * 1.1;
-      vBright = mix(iris, lidShade, covered);
+      // Escala de marcas girando ao contrário: dois sentidos opostos é o que
+      // impede o olho de ler como um único disco rígido.
+      float ticks = step(0.78, fract(turn * 34.0 - uTime * 0.22));
+      ticks *= exp(-pow((rad - 0.95) * 17.0, 2.0)) * 0.7;
+
+      // Circunferências finas de apoio, estáticas.
+      float fine = smoothstep(0.82, 1.0, abs(fract(rad * 5.0) - 0.5) * 2.0) * 0.18;
+
+      float ringLight = mainRing + outer + ticks + fine;
+      float lit = whiteBase + ringLight;
+      // A proporção entre fundo e anel decide a cor: onde o anel é forte vence
+      // o amarelo, onde ele some sobra o branco.
+      vWhite = (whiteBase / max(lit, 1e-4)) * (1.0 - covered);
+      vBright = mix(lit, lidShade, covered);
       regionOut = mix(r, 0.0, step(0.5, covered));
-      sizeScale = 1.35;
+      sizeScale = 1.2;
     } else if (r > 2.5) {                                // cabelo
       vBright *= 0.35 + hash11(aSeed * 13.0) * 0.95;
       sizeScale = 1.3;
@@ -239,9 +265,14 @@ export const HEAD_VERT = /* glsl */ `
       // O realce cresce para o miolo do lábio e some na borda vermelhão.
       float edge = smoothstep(1.0, 0.72, aDetail);
       vBright *= 1.0 + edge * 0.5 + uJaw * 0.5;
+      // Sorriso ergue as comissuras, não o centro; a largura acompanha a vogal.
+      float corner = smoothstep(0.015, 0.11, abs(p.x));
+      p.y += uSmile * 0.016 * corner;
+      p.x *= 1.0 + uMouthWide * 0.07;
     } else if (r > 0.5) {                                // esclera
-      // Bem apagada: ela só emoldura o mecanismo, não compete com ele.
-      vBright = mix(min(vBright * 0.3, 0.24), lidShade, covered);
+      // Borda do globo: mesmo branco pulsante, um pouco mais fraco que o miolo.
+      vBright = mix(0.26 + eyePulse * 0.14, lidShade, covered);
+      vWhite = 1.0 - covered;
       regionOut = mix(r, 0.0, step(0.5, covered));
     }
     vBright *= pulse * 0.3 + 0.78;
@@ -253,6 +284,12 @@ export const HEAD_VERT = /* glsl */ `
     // vêm à frente.
     float meshFade = mix(0.3 + aGlow * 0.7, 1.0, isPatch);
     vAlpha = aFade * rv * aArea * mix(0.32, 1.0, front) * meshFade;
+
+    // No olho, onde não há anel não há nada: o alfa segue o brilho, então o
+    // desenho flutua sobre a pele em vez de assentar num disco preenchido.
+    if ((r > 0.5 && r < 1.5) || (r > 3.5 && r < 5.5)) {
+      vAlpha *= clamp(vBright * 1.7, 0.0, 1.0);
+    }
 
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     // Os retalhos são detalhe fino, não nós da constelação: pontos menores.
@@ -273,6 +310,7 @@ export const HEAD_FRAG = /* glsl */ `
   varying float vBright;
   varying float vRegion;
   varying float vAlpha;
+  varying float vWhite;
 
   void main() {
     // Sprite compacto com halo curto: borda mole demais transforma os nós em
@@ -282,14 +320,19 @@ export const HEAD_FRAG = /* glsl */ `
     a *= a;
 
     vec3 col = mix(uColorEdge, uColorCore, clamp(vBright * 0.6, 0.0, 1.0));
-    if (vRegion > 4.5 && vRegion < 5.5) col = mix(uColorIris, vec3(1.0), 0.3);    // núcleo
-    else if (vRegion > 3.5 && vRegion < 4.5) col = uColorIris;                    // íris
-    else if (vRegion > 0.5 && vRegion < 1.5) col = mix(col, vec3(0.86, 0.94, 1.0), 0.7); // esclera
+    // Olho: o branco fluorescente do globo cede lugar ao amarelo onde o anel
+    // acende. vWhite carrega essa proporção, já calculada no vértice.
+    if (vRegion > 3.5 && vRegion < 5.5) col = mix(uColorIris, vec3(0.95, 0.98, 1.0), vWhite);
+    else if (vRegion > 0.5 && vRegion < 1.5) col = vec3(0.95, 0.98, 1.0);         // esclera
     else if (vRegion > 1.5 && vRegion < 2.5) col = mix(col, uColorAccent, 0.3);   // lábios
 
     float alpha = a * vAlpha;
     if (alpha < 0.004) discard;
-    gl_FragColor = vec4(col * (0.5 + vBright), alpha);
+
+    // O piso de 0.5 dá corpo à pele, mas no olho ele acenderia o vazio entre
+    // os anéis — ali a cor acompanha o brilho puro.
+    float lift = (vRegion > 3.5 && vRegion < 5.5) ? 0.0 : 0.5;
+    gl_FragColor = vec4(col * (lift + vBright), alpha);
   }
 `
 

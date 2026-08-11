@@ -19,6 +19,47 @@
   --color-holo-700: #08596b;
   --color-amber: #ffb547;
   --color-alert: #ff5470;
+
+  /* Sistema visual da IA — a única fonte de verdade para cor da interface.
+     Nenhum hex solto nos componentes. */
+  --color-ai-bg: #020617;
+  --color-ai-surface: #06111f;
+  --color-ai-surface-2: #0b1f33;
+  --color-ai-primary: #00e5ff;
+  --color-ai-secondary: #22d3ee;
+  --color-ai-accent: #38bdf8;
+  --color-ai-soft: #7dd3fc;
+  --color-ai-warn: #fb923c;
+  --color-ai-ok: #34d399;
+}
+
+:root {
+  /* Velocidades. Valores distintos e não múltiplos entre si, para os elementos
+     nunca entrarem em fase e lerem como um único objeto girando. */
+  --ai-speed-glacial: 46s;
+  --ai-speed-slow: 27s;
+  --ai-speed-medium: 16s;
+  --ai-speed-fast: 7s;
+  --ai-speed-pulse: 3.4s;
+  --ai-speed-scan: 9s;
+
+  /* Intensidades de brilho */
+  --ai-glow-soft: 0 0 12px color-mix(in oklab, var(--color-ai-primary) 28%, transparent);
+  --ai-glow-medium: 0 0 18px color-mix(in oklab, var(--color-ai-primary) 42%, transparent);
+  --ai-glow-strong:
+    0 0 6px color-mix(in oklab, var(--color-ai-primary) 55%, transparent),
+    0 0 26px color-mix(in oklab, var(--color-ai-primary) 32%, transparent);
+
+  /* Superfícies */
+  --ai-border: 1px solid color-mix(in oklab, var(--color-ai-primary) 20%, transparent);
+  --ai-border-strong: 1px solid color-mix(in oklab, var(--color-ai-primary) 42%, transparent);
+  --ai-radius: 3px;
+  --ai-radius-lg: 10px;
+
+  /* Opacidades dos elementos decorativos — periferia nunca compete com conteúdo */
+  --ai-decor-faint: 0.16;
+  --ai-decor-soft: 0.3;
+  --ai-decor-visible: 0.55;
 }
 
 @layer base {
@@ -131,6 +172,114 @@
   }
 }
 
+/* Anéis holográficos — direção e velocidade vêm inline, por anel. */
+@keyframes hud-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Pontos percorrendo trilhas de circuito. Anima dashoffset, que a GPU resolve
+   sem layout — barato mesmo com dezenas de traços simultâneos. */
+@keyframes ai-trace {
+  to {
+    stroke-dashoffset: -200;
+  }
+}
+
+/* Varredura horizontal ou vertical de uma região. */
+@keyframes ai-scan-y {
+  0% {
+    transform: translateY(-8%);
+    opacity: 0;
+  }
+  12%,
+  88% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(108%);
+    opacity: 0;
+  }
+}
+
+@keyframes ai-scan-x {
+  0% {
+    transform: translateX(-8%);
+    opacity: 0;
+  }
+  12%,
+  88% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(108%);
+    opacity: 0;
+  }
+}
+
+/* Partículas de dados subindo pelo ambiente. */
+@keyframes ai-drift {
+  0% {
+    transform: translate3d(0, 12px, 0);
+    opacity: 0;
+  }
+  18%,
+  76% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(0, -46px, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes ai-node-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+/* Expansão curta de um anel — confirmação de SUCCESS. */
+@keyframes ai-ripple {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.75;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+@keyframes hud-beam {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: scaleY(0.72);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes hud-breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 @keyframes alan-sweep {
   from {
     transform: translateX(-100%);
@@ -155,5 +304,28 @@
   .animate-rise,
   .animate-sweep {
     animation: none;
+  }
+
+  /*
+   * Todo o vocabulário decorativo para. As animações aqui são exclusivamente
+   * ornamentais: nenhuma informação é transmitida só por movimento, então
+   * desligá-las não retira nada da interface — o estado do sistema continua
+   * legível por cor, rótulo e texto.
+   */
+  [style*='hud-spin'],
+  [style*='hud-beam'],
+  [style*='hud-breathe'],
+  [style*='ai-trace'],
+  [style*='ai-scan'],
+  [style*='ai-drift'],
+  [style*='ai-node-pulse'],
+  [style*='ai-ripple'],
+  [data-ai-decor] {
+    animation: none !important;
+  }
+
+  /* Partículas somem de vez: paradas viram só ruído visual. */
+  [data-ai-decor='particles'] {
+    display: none;
   }
 }

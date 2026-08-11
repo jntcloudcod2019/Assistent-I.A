@@ -10,7 +10,6 @@ import {
   makeProfile,
   EYE_ASPECT,
   EYE_PATCH,
-  MOUTH_PATCH,
   REGION,
 } from './faceModel'
 
@@ -51,12 +50,13 @@ export interface HeadData {
   lineIndices: Uint32Array
 }
 
-const NU = 56
-const NV = 48
-/** Fração das arestas descartada, para a malha ficar incompleta. */
-const EDGE_DROPOUT = 0.3
+// Malha fina o suficiente para as arestas descreverem a superfície em vez de
+// facetá-la. A carta (u, v) já corre em anéis ao redor da cabeça e meridianos
+// descendo, então o quadriculado segue o fluxo anatômico sozinho.
+const NU = 104
+const NV = 92
 /** Deslocamento máximo do vértice, em frações de célula. */
-const JITTER = 0.42
+const JITTER = 0.06
 /** Partículas soltas orbitando a cabeça. */
 const MOTES = 70
 
@@ -153,10 +153,64 @@ interface Ring {
 interface ContourPath {
   pts: Array<[u: number, v: number]>
   closed: boolean
+  region: number
+  /**
+   * Curva os cantos por Catmull-Rom. Verdadeiro para anatomia; falso para
+   * circuitos, que precisam de ângulos retos — suavizá-los os transformaria
+   * em rabiscos orgânicos.
+   */
+  smooth?: boolean
 }
 
 const mirrorPath = (pts: Array<[number, number]>): Array<[number, number]> =>
   pts.map(([u, v]) => [-u, v] as [number, number])
+
+function catmull(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const t2 = t * t
+  const t3 = t2 * t
+  return (
+    0.5 *
+    (2 * p1 +
+      (-p0 + p2) * t +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+      (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
+  )
+}
+
+/**
+ * Adensa e suaviza um traço por Catmull-Rom.
+ *
+ * Os pontos de controle são poucos, escolhidos por anatomia. Ligados direto,
+ * o contorno lê como uma linha quebrada de vértices soltos em vez de curva —
+ * a boca em particular perde o arco do cupido.
+ */
+function resamplePath(
+  pts: Array<[number, number]>,
+  closed: boolean,
+  perSegment: number,
+): Array<[number, number]> {
+  const n = pts.length
+  if (n < 3) return pts
+
+  const at = (i: number): [number, number] =>
+    closed ? pts[(i + n) % n] : pts[Math.min(n - 1, Math.max(0, i))]
+
+  const out: Array<[number, number]> = []
+  const segments = closed ? n : n - 1
+
+  for (let i = 0; i < segments; i++) {
+    const [x0, y0] = at(i - 1)
+    const [x1, y1] = at(i)
+    const [x2, y2] = at(i + 1)
+    const [x3, y3] = at(i + 2)
+    for (let s = 0; s < perSegment; s++) {
+      const t = s / perSegment
+      out.push([catmull(x0, x1, x2, x3, t), catmull(y0, y1, y2, y3, t)])
+    }
+  }
+  if (!closed) out.push(pts[n - 1])
+  return out
+}
 
 /**
  * O nariz não sobrevive a um retalho polar — anéis concêntricos na ponta leriam
@@ -193,13 +247,152 @@ function buildContours(): ContourPath[] {
     [0.635, 0.3235],
   ]
 
-  return [
-    { pts: noseLoop, closed: true },
-    { pts: dorsum, closed: false },
-    { pts: mirrorPath(dorsum), closed: false },
-    { pts: brow, closed: false },
-    { pts: mirrorPath(brow), closed: false },
+  // — Pálpebras —————————————————————————————————————————————
+  // Uma elipse não é olho. O que faz a abertura ler como humana são três
+  // assimetrias: o canto externo fica mais alto que o interno (inclinação
+  // cantal), o ápice da pálpebra superior desloca-se para o lado nasal, e o
+  // vale da inferior para o temporal. Simétrico, o olho vira amêndoa genérica.
+  const eyelid = (cu: number): Array<[number, number]> => {
+    const cv = 0.353
+    return [
+      [cu - 0.2, cv + 0.0016], // canto interno, mais baixo
+      [cu - 0.13, cv - 0.0092],
+      [cu - 0.05, cv - 0.0134], // ápice superior, deslocado ao nasal
+      [cu + 0.05, cv - 0.0116],
+      [cu + 0.14, cv - 0.0068],
+      [cu + 0.2, cv - 0.0024], // canto externo, mais alto
+      [cu + 0.13, cv + 0.0062],
+      [cu + 0.05, cv + 0.0104], // vale inferior, deslocado ao temporal
+      [cu - 0.05, cv + 0.01],
+      [cu - 0.13, cv + 0.0068],
+    ]
+  }
+
+  // — Lábios ———————————————————————————————————————————————
+  // Um retalho polar só sabe produzir elipse, e elipse não é boca. Os lábios
+  // precisam de arco do cupido (dois picos com depressão no meio), lábio
+  // inferior mais cheio que o superior e comissuras afiladas — nada disso
+  // existe num anel concêntrico.
+  const CORNER: [number, number] = [0.3, 0.5125]
+
+  // Borda vermelhão superior, da comissura esquerda à direita.
+  const upperBorder: Array<[number, number]> = [
+    [-0.3, 0.5125],
+    [-0.222, 0.5045],
+    [-0.145, 0.4975],
+    [-0.072, 0.4935], // pico esquerdo do arco do cupido
+    [0.0, 0.4975], // depressão central
+    [0.072, 0.4935], // pico direito
+    [0.145, 0.4975],
+    [0.222, 0.5045],
+    CORNER,
   ]
+
+  // Linha de fechamento (stomion), da direita para a esquerda.
+  const stomionRL: Array<[number, number]> = [
+    [0.21, 0.5145],
+    [0.11, 0.5145],
+    [0.0, 0.5135],
+    [-0.11, 0.5145],
+    [-0.21, 0.5145],
+  ]
+
+  // Borda inferior, mais alta que a superior: proporção vermelhão ≈ 1 : 1.6.
+  const lowerBorderRL: Array<[number, number]> = [
+    [0.245, 0.5235],
+    [0.17, 0.5325],
+    [0.085, 0.5375],
+    [0.0, 0.5385],
+    [-0.085, 0.5375],
+    [-0.17, 0.5325],
+    [-0.245, 0.5235],
+  ]
+
+  const upperLip = [...upperBorder, ...stomionRL]
+  const lowerLip = [...upperBorder.slice(0, 1), ...[...stomionRL].reverse(), CORNER, ...lowerBorderRL]
+
+  const paths: ContourPath[] = [
+    { pts: noseLoop, closed: true, region: REGION.SKIN, smooth: true },
+    { pts: dorsum, closed: false, region: REGION.SKIN, smooth: true },
+    { pts: mirrorPath(dorsum), closed: false, region: REGION.SKIN, smooth: true },
+    { pts: brow, closed: false, region: REGION.BROW, smooth: true },
+    { pts: mirrorPath(brow), closed: false, region: REGION.BROW, smooth: true },
+    { pts: upperLip, closed: true, region: REGION.LIPS, smooth: true },
+    { pts: lowerLip, closed: true, region: REGION.LIPS, smooth: true },
+    { pts: eyelid(0.44), closed: true, region: REGION.EYELID, smooth: true },
+    { pts: mirrorPath(eyelid(0.44)), closed: true, region: REGION.EYELID, smooth: true },
+    ...buildSkullCircuits(),
+  ]
+
+  return paths.map((p) => ({
+    ...p,
+    // Anatomia recebe curva; circuito recebe apenas adensamento linear.
+    pts: p.smooth ? resamplePath(p.pts, p.closed, 4) : densifyPath(p.pts, 5),
+  }))
+}
+
+/** Subdivide segmentos retos sem curvá-los. */
+function densifyPath(pts: Array<[number, number]>, perSegment: number): Array<[number, number]> {
+  const out: Array<[number, number]> = []
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i]
+    const [x1, y1] = pts[i + 1]
+    for (let s = 0; s < perSegment; s++) {
+      const t = s / perSegment
+      out.push([x0 + (x1 - x0) * t, y0 + (y1 - y0) * t])
+    }
+  }
+  out.push(pts[pts.length - 1])
+  return out
+}
+
+/**
+ * Trilhas de circuito sobre o crânio.
+ *
+ * Duas regras dão a leitura de placa de circuito: os trechos correm apenas em
+ * u ou apenas em v, alternando — nunca na diagonal —, e a calota é o único
+ * território permitido, então o rosto continua limpo. Somam-se a uma coluna de
+ * luz descendo o plano sagital, que é o eixo da referência.
+ */
+function buildSkullCircuits(): ContourPath[] {
+  const paths: ContourPath[] = []
+  const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x))
+
+  for (let i = 0; i < 16; i++) {
+    // Distribui em torno da cabeça, evitando o plano sagital que a coluna ocupa.
+    const side = i % 2 === 0 ? 1 : -1
+    let u = side * (0.16 + hash2(i, 3) * 1.5)
+    let v = 0.05 + hash2(i, 7) * 0.2
+    const pts: Array<[number, number]> = [[u, v]]
+
+    const legs = 3 + Math.floor(hash2(i, 11) * 4)
+    for (let l = 0; l < legs; l++) {
+      if (l % 2 === 0) {
+        u += (hash2(i, l + 20) - 0.5) * 0.7
+      } else {
+        v = clamp(v + (hash2(i, l + 40) - 0.5) * 0.13, 0.035, 0.3)
+      }
+      pts.push([u, v])
+    }
+
+    paths.push({ pts, closed: false, region: REGION.CIRCUIT, smooth: false })
+  }
+
+  // Coluna de luz no plano sagital: do alto do crânio à raiz do nariz.
+  paths.push({
+    pts: [
+      [0, 0.035],
+      [0, 0.14],
+      [0, 0.24],
+      [0, 0.31],
+      [0, 0.355],
+    ],
+    closed: false,
+    region: REGION.CIRCUIT,
+    smooth: false,
+  })
+
+  return paths
 }
 
 interface Patch {
@@ -207,56 +400,67 @@ interface Patch {
   rings: Ring[]
 }
 
-function polarPatch(anchor: PatchAnchor, rings: number, rMax: number): Patch {
+
+/**
+ * Retalho do olho amostrado em ANÉIS ISOTRÓPICOS.
+ *
+ * A abertura palpebral é ~2.8× mais larga que alta, então uma grade polar
+ * comum distribui os pontos por raio da abertura — e as circunferências do
+ * shader, que vivem no raio isotrópico, caem entre as amostras nos lados do
+ * olho e desaparecem. Amostrando direto em espaço isotrópico, cada anel é uma
+ * circunferência exata no mundo e os pontos caem sempre sobre ela.
+ */
+function eyePatch(anchor: PatchAnchor, rings: number, isoMax: number): Patch {
   const points: PatchPoint[] = []
   const ringSpans: Ring[] = []
-  const dr = rMax / rings
+  const dIso = isoMax / rings
 
   for (let ri = 0; ri < rings; ri++) {
-    const r = (ri + 0.5) * dr
-    const spokes = Math.max(6, Math.round((TWO_PI * r) / dr))
+    const rIso = (ri + 0.5) * dIso
+    const spokes = Math.max(12, Math.round((TWO_PI * rIso) / dIso))
     const phase = (ri % 2) * 0.5
-    ringSpans.push({ start: points.length, count: spokes })
+    ringSpans.push({ start: points.length, count: 0 })
 
     for (let si = 0; si < spokes; si++) {
       const a = (si + phase) / spokes
-      const theta = a * TWO_PI
+      const phi = a * TWO_PI
+      // Volta do espaço isotrópico para o da abertura.
+      const px = (rIso * Math.cos(phi)) / EYE_ASPECT
+      const py = rIso * Math.sin(phi)
+      // Fora da fenda palpebral o ponto não existe.
+      if (Math.hypot(px, py) > 1.12) continue
+
       points.push({
-        u: anchor.u + Math.cos(theta) * r * anchor.su,
-        v: anchor.v + Math.sin(theta) * r * anchor.sv,
-        r,
+        u: anchor.u + px * anchor.su,
+        v: anchor.v + py * anchor.sv,
+        r: Math.hypot(px, py),
         a,
-        detail: r,
+        detail: rIso,
       })
     }
   }
+
   return { points, rings: ringSpans }
 }
 
 /**
- * A abertura é amendoada, mas a íris é um círculo. `rIso` desfaz o achatamento
- * da fenda palpebral, então pupila e íris saem redondas mesmo num olho largo.
+ * Território reservado ao olho, com folga sobre o retalho.
+ *
+ * Vale tanto para os pontos da grade quanto para as arestas: nada estrutural
+ * sobrevive aqui dentro.
  */
+function insideEyeAperture(u: number, v: number): boolean {
+  const du = (Math.abs(u) - EYE_PATCH.u) / (EYE_PATCH.su * 1.16)
+  const dv = (v - EYE_PATCH.v) / (EYE_PATCH.sv * 1.35)
+  return du * du + dv * dv < 1
+}
+
 function classifyEye(p: PatchPoint): number {
-  if (p.r > 1) return REGION.EYELID
-
-  const theta = p.a * TWO_PI
-  const rIso = Math.hypot(Math.cos(theta) * p.r * EYE_ASPECT, Math.sin(theta) * p.r)
-  p.detail = rIso
-
-  // A íris ultrapassa a abertura em altura e é recortada pelas pálpebras, como
-  // num olho real. Limitá-la a rIso < 1 deixava só uma faixa vertical estreita
-  // de mecanismo, cercada de esclera.
-  if (rIso < 0.5) return REGION.PUPIL
-  if (rIso < 1.3) return REGION.IRIS
+  if (p.detail < 0.42) return REGION.PUPIL
+  if (p.detail < 1.34) return REGION.IRIS
   return REGION.SCLERA
 }
 
-function classifyMouth(p: PatchPoint): number {
-  if (p.r > 1) return REGION.SKIN
-  const dv = Math.sin(p.a * TWO_PI) * p.r
-  return Math.abs(dv) < 0.13 ? REGION.MOUTH_LINE : REGION.LIPS
-}
 
 // ---------------------------------------------------------------------------
 // Construção
@@ -265,12 +469,11 @@ function classifyMouth(p: PatchPoint): number {
 export function buildHeadData(): HeadData {
   const gridCount = NU * NV
 
-  // A íris mecânica precisa de resolução: anéis, arcos e marcas radiais não
-  // aparecem com 5 anéis de amostragem.
-  const eyeLeft = polarPatch(EYE_PATCH, 14, 1.16)
-  const eyeRight = polarPatch({ ...EYE_PATCH, u: -EYE_PATCH.u }, 14, 1.16)
-  const mouth = polarPatch(MOUTH_PATCH, 4, 1.12)
-  const patches = [eyeLeft, eyeRight, mouth]
+  // Anéis isotrópicos: a densidade acompanha as circunferências que o shader
+  // desenha, senão elas caem entre as amostras.
+  const eyeLeft = eyePatch(EYE_PATCH, 20, 1.4)
+  const eyeRight = eyePatch({ ...EYE_PATCH, u: -EYE_PATCH.u }, 20, 1.4)
+  const patches = [eyeLeft, eyeRight]
   const patchCount = patches.reduce((n, p) => n + p.points.length, 0)
   const contours = buildContours()
   const contourCount = contours.reduce((n, c) => n + c.pts.length, 0)
@@ -287,6 +490,7 @@ export function buildHeadData(): HeadData {
   const glow = new Float32Array(count)
 
   // — Grade principal ——————————————————————————————————————
+  const blockedByEye = new Uint8Array(gridCount)
   const base = new Float32Array(gridCount * 3)
   const baseNormals = new Float32Array(gridCount * 3)
   const us = new Float32Array(gridCount)
@@ -332,9 +536,14 @@ export function buildHeadData(): HeadData {
 
       region[k] = classifyRegion(u, v)
       jaw[k] = jawWeight(u, v)
-      fade[k] = fadeWeight(v)
       glow[k] = featureGlow(u, v)
       seed[k] = hash2(i + 7, j + 13)
+
+      // A malha estrutural não entra no olho. Ela cruzava a abertura por cima
+      // dos anéis, e nenhuma quantidade de brilho no retalho resolve isso — a
+      // grade tinha de sair do caminho.
+      blockedByEye[k] = insideEyeAperture(u, v) ? 1 : 0
+      fade[k] = blockedByEye[k] ? 0 : fadeWeight(v)
     }
   }
 
@@ -404,18 +613,14 @@ export function buildHeadData(): HeadData {
     }
   }
 
-  // Olho: o anel externo dá a fenda palpebral e o interno lê como íris.
-  const eyeRings = (i: number, n: number) => i === n - 1 || i === 1
-  // Boca: só o contorno externo — os internos viravam alvo concêntrico.
-  const outerOnly = (i: number, n: number) => i === n - 1
-  writePatch(eyeLeft, classifyEye, 0.9, eyeRings)
-  writePatch(eyeRight, classifyEye, 0.9, eyeRings)
-  writePatch(mouth, classifyMouth, 0.8, outerOnly)
+  // Sem contorno traçado: quem desenha os anéis é o shader, e os laços do
+  // retalho ficariam recortados pelo corte da fenda palpebral.
+  const noRings = () => false
+  writePatch(eyeLeft, classifyEye, 0.9, noRings)
+  writePatch(eyeRight, classifyEye, 0.9, noRings)
 
   // — Partículas soltas ————————————————————————————————————
-  // As referências têm pontos flutuando ao redor da cabeça, alguns ligados por
-  // linhas longas. É o que dá a impressão de varredura em andamento.
-  const moteStart = cursor
+  // Pontos flutuando ao redor da cabeça, sem nenhuma linha ligando-os a ela.
   for (let m = 0; m < MOTES; m++) {
     const k = cursor++
     const k3 = k * 3
@@ -448,7 +653,9 @@ export function buildHeadData(): HeadData {
   const contourEdges: number[] = []
   for (const path of contours) {
     const base = cursor
-    for (const [u, v] of path.pts) {
+    const n = path.pts.length
+    for (let s = 0; s < n; s++) {
+      const [u, v] = path.pts[s]
       const k = cursor++
       const k3 = k * 3
       evalSurface(u, v, positions, k3)
@@ -468,17 +675,18 @@ export function buildHeadData(): HeadData {
       positions[k3 + 1] += normals[k3 + 1] * 0.004
       positions[k3 + 2] += normals[k3 + 2] * 0.004
 
-      region[k] = REGION.SKIN
+      region[k] = path.region
       jaw[k] = jawWeight(u, v)
       fade[k] = fadeWeight(v)
       glow[k] = 1
       area[k] = 0.8
       seed[k] = 0.5
       // detail > 0 marca como retalho: ponto menor, sem cintilação de nó.
-      detail[k] = 0.5
+      // Nos circuitos ele carrega a posição ao longo da trilha, para o pulso
+      // de dado saber por onde viajar.
+      detail[k] = path.region === REGION.CIRCUIT ? s / Math.max(1, n - 1) : 0.5
     }
 
-    const n = path.pts.length
     const last = path.closed ? n : n - 1
     for (let s = 0; s < last; s++) {
       contourEdges.push(base + s, base + ((s + 1) % n))
@@ -497,7 +705,7 @@ export function buildHeadData(): HeadData {
     area,
     detail,
     glow,
-    lineIndices: buildLattice(moteStart, contourRings, contourEdges),
+    lineIndices: buildLattice(contourRings, contourEdges, blockedByEye),
   }
 }
 
@@ -565,13 +773,13 @@ function normalizeArea(area: Float32Array, upTo: number) {
 /**
  * Malha triangulada: cada quadrícula contribui lado, base e diagonal. Uma
  * fração das arestas é descartada para a malha ficar incompleta como nas
- * referências. Algumas partículas soltas são amarradas à cabeça por linhas
- * longas, produzindo os raios que saem do contorno.
+ * referências. As partículas soltas ficam desconectadas — sem linhas ligando-as
+ * à cabeça.
  */
 function buildLattice(
-  moteStart: number,
   contourRings: Ring[],
   contourEdges: number[],
+  blockedByEye: Uint8Array,
 ): Uint32Array {
   const idx: number[] = [...contourEdges]
 
@@ -593,17 +801,15 @@ function buildLattice(
       const below = (j + 1) * NU + i
       const diag = (j + 1) * NU + iNext
 
-      if (hash2(i, j * 3 + 1) > EDGE_DROPOUT) idx.push(here, right)
-      if (hash2(i, j * 3 + 2) > EDGE_DROPOUT) idx.push(here, below)
-      if (hash2(i, j * 3 + 3) > EDGE_DROPOUT) idx.push(here, diag)
-    }
-  }
+      // Basta uma ponta dentro do olho para a aresta ser descartada.
+      if (blockedByEye[here]) continue
 
-  // Raios ligando partículas soltas a vértices da cabeça.
-  for (let m = 0; m < MOTES; m += 4) {
-    const mote = moteStart + m
-    const anchor = Math.floor(hash2(m + 5, 29) * NU * NV)
-    idx.push(mote, anchor)
+      // Malha completa, sem descarte aleatório: com a grade fina, arestas
+      // faltando leriam como buracos na superfície, e não como estilo.
+      if (!blockedByEye[right]) idx.push(here, right)
+      if (!blockedByEye[below]) idx.push(here, below)
+      if (!blockedByEye[diag]) idx.push(here, diag)
+    }
   }
 
   return Uint32Array.from(idx)

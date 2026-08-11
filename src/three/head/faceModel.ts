@@ -44,6 +44,7 @@ export const REGION = {
   BROW: 7,
   NOSTRIL: 8,
   EYELID: 9,
+  CIRCUIT: 10,
 } as const
 
 /**
@@ -250,9 +251,12 @@ const FEATURES: FeatureNode[] = [
   { id: 'subMandible', u: 0.6, v: 0.678, su: 0.34, sv: 0.032, amp: -0.022, mirror: true },
 
   // — Orelhas ——————————————————————————————————————————————
-  { id: 'ear', u: 1.52, v: 0.375, su: 0.12, sv: 0.065, amp: 0.078, mirror: true },
-  { id: 'earInner', parent: 'ear', u: 0.032, v: 0, su: 0.055, sv: 0.034, amp: -0.045, mirror: true },
-  { id: 'earLobe', parent: 'ear', u: 0.0, v: 0.062, su: 0.075, sv: 0.022, amp: 0.042, mirror: true },
+  // Amplitudes contidas. Numa malha low-poly a concha funda da orelha não tem
+  // vértices suficientes para descrever a curva, e o que sobra são facetas
+  // avulsas que leem como defeito de geometria em vez de anatomia.
+  { id: 'ear', u: 1.52, v: 0.375, su: 0.12, sv: 0.065, amp: 0.042, mirror: true },
+  { id: 'earInner', parent: 'ear', u: 0.032, v: 0, su: 0.055, sv: 0.034, amp: -0.014, mirror: true },
+  { id: 'earLobe', parent: 'ear', u: 0.0, v: 0.062, su: 0.075, sv: 0.022, amp: 0.018, mirror: true },
 
   // — Cabelo ———————————————————————————————————————————————
   // su enorme = influência independente de u, uma calota em torno de toda a cabeça.

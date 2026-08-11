@@ -1,8 +1,7 @@
 import { Canvas } from '@react-three/fiber'
 import { Bloom, EffectComposer } from '@react-three/postprocessing'
 
-import { Backdrop } from './Backdrop'
-import { Pedestal } from './Pedestal'
+import { BrainPoints } from './head/BrainPoints'
 import { HeadPoints } from './head/HeadPoints'
 
 export function HologramScene() {
@@ -10,14 +9,11 @@ export function HologramScene() {
     <Canvas
       dpr={[1, 2]}
       camera={{ position: [0, -0.12, 2.95], fov: 32, near: 0.1, far: 30 }}
-      gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
-      // Nenhuma luz na cena: todo material é aditivo e emissivo por conta própria.
-      onCreated={({ gl }) => gl.setClearColor('#02080d', 1)}
+      gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+      // Alpha ligado e sem clear color: o fundo é do DOM, e os anéis do HUD
+      // ficam atrás do canvas.
     >
-      <fog attach="fog" args={['#02080d', 3.4, 8]} />
-
-      <Backdrop />
-      <Pedestal />
+      <BrainPoints />
       <HeadPoints />
 
       <EffectComposer>

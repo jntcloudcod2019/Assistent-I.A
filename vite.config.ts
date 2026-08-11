@@ -8,5 +8,21 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(__dirname, 'src') },
   },
-  server: { port: 5173 },
+  server: {
+    port: 5173,
+    proxy: {
+      // O front fala com o mesmo origin; o proxy evita CORS e mantém a URL
+      // idêntica em desenvolvimento e produção.
+      '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+        // Sem isto o Vite bufferiza a resposta e o SSE chega todo de uma vez.
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['cache-control'] = 'no-cache, no-transform'
+          })
+        },
+      },
+    },
+  },
 })

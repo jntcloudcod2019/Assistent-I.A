@@ -1,0 +1,53 @@
+// Prisma + MongoDB tem duas restrições que mudam o fluxo de trabalho:
+//
+//   1. `prisma migrate` NÃO funciona com MongoDB. Usa-se `prisma db push`.
+//      Não existe histórico de migrações — toda mudança de schema é um push.
+//   2. O conector exige REPLICA SET, porque o Prisma usa transações
+//      internamente para evitar escritas parciais em queries aninhadas. O
+//      Atlas já vem configurado; num Mongo local é preciso criar um replica
+//      set, mesmo que de um nó só.
+//
+// E um detalhe que costuma confundir: `db push` não cria as coleções. Ele cria
+// os ÍNDICES. As coleções nascem na primeira escrita.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Conversation {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+
+  @@map("conversations")
+}
+
+/// Mensagens em coleção própria, e não embutidas na conversa: um documento
+/// MongoDB tem teto de 16 MB, e uma conversa longa o alcança. Separado, o
+/// histórico cresce sem limite e pode ser paginado.
+model Message {
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  conversationId String       @db.ObjectId
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  /// 'user' | 'assistant' | 'system'
+  role      String
+  content   String
+  timestamp DateTime @default(now())
+
+  /// Modelo, tokens e latência. Guardar desde já permite analisar custo e
+  /// qualidade depois sem migrar nada.
+  metadata Json?
+
+  /// Índice composto: é ele que mantém a leitura do histórico barata quando a
+  /// conversa cresce, já que toda consulta filtra por conversa e ordena por tempo.
+  @@index([conversationId, timestamp])
+  @@map("messages")
+}

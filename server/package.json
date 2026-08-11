@@ -1,0 +1,25 @@
+{
+  "name": "alan-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.17.0",
+    "fastify": "^5.2.0",
+    "openai": "^4.77.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "prisma": "^6.17.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

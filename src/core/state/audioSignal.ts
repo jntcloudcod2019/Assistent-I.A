@@ -14,6 +14,21 @@ export const audioSignal = {
   thinking: 0,
   /** Energia geral do sistema — sobe em qualquer atividade, 0..1 */
   energy: 0,
+
+  // — Canais de expressão ————————————————————————————————
+  // Fala sem rosto é boneco de ventríloquo: a mandíbula sozinha não convence.
+  // Estes canais carregam o que acompanha a voz num falante real.
+
+  /** Elevação das sobrancelhas, 0..1 — ênfase e pergunta */
+  brow: 0,
+  /** Fechamento parcial das pálpebras, 0..1 — concentração e afirmação */
+  squint: 0,
+  /** Inclinação lateral da cabeça, -1..1 — pontuação e dúvida */
+  tilt: 0,
+  /** Elevação das comissuras, 0..1 */
+  smile: 0,
+  /** Largura da boca, 0..1 — distingue vogal aberta de arredondada */
+  mouthWide: 0,
 }
 
 export type AudioSignal = typeof audioSignal

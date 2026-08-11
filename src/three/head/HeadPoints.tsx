@@ -13,10 +13,11 @@ import { HEAD_FRAG, HEAD_VERT, LATTICE_FRAG, LATTICE_VERT } from './head.glsl'
 const COLOR_CORE = new THREE.Color('#8ff0ff')
 const COLOR_EDGE = new THREE.Color('#0a4fb0')
 const COLOR_ACCENT = new THREE.Color('#00bfff')
-/** Roxo neon da íris — deliberadamente fora da família ciano da cabeça, para
- *  que o olhar seja a primeira coisa que o rosto comunica. Vermelho médio e
- *  verde baixo mantêm o tom violeta mesmo quando o brilho satura o azul. */
-const COLOR_IRIS = new THREE.Color('#7b2cff')
+/** Amarelo fluorescente da íris — o complementar do ciano da cabeça, então o
+ *  olhar é a primeira coisa que o rosto comunica. Azul em zero: são o vermelho
+ *  e o verde que saturam juntos, e o tom sobe para amarelo-branco em vez de
+ *  desbotar. */
+const COLOR_IRIS = new THREE.Color('#e8ff0a')
 
 /** 10 piscadas por minuto — uma a cada 6 s. */
 const BLINK_INTERVAL = 6
@@ -78,6 +79,10 @@ export function HeadPoints() {
       uSize: { value: 4.2 },
       uEyeAspect: { value: EYE_ASPECT },
       uBlink: { value: 0 },
+      uBrow: { value: 0 },
+      uSquint: { value: 0 },
+      uSmile: { value: 0 },
+      uMouthWide: { value: 0.3 },
       uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
       uColorCore: { value: COLOR_CORE },
       uColorEdge: { value: COLOR_EDGE },
@@ -199,6 +204,13 @@ export function HeadPoints() {
 
     audioSignal.energy = damp(audioSignal.energy, levelTarget, 6, dt)
 
+    // Expressão. Os canais já vêm suavizados de speak.ts, então aqui são
+    // copiados direto — amortecer duas vezes atrasaria o gesto em relação à voz.
+    uniforms.uBrow.value = audioSignal.brow
+    uniforms.uSquint.value = audioSignal.squint
+    uniforms.uSmile.value = audioSignal.smile
+    uniforms.uMouthWide.value = audioSignal.mouthWide
+
     // A cabeça acompanha o ponteiro de leve e balança sozinha em repouso.
     const group = groupRef.current
     if (group) {
@@ -206,6 +218,8 @@ export function HeadPoints() {
       const targetX = -state.pointer.y * 0.16 + Math.sin(t * 0.27) * 0.02
       group.rotation.y = damp(group.rotation.y, targetY, 3, dt)
       group.rotation.x = damp(group.rotation.x, targetX, 3, dt)
+      // Inclinação lateral: o gesto de dúvida e de pontuação na fala.
+      group.rotation.z = damp(group.rotation.z, audioSignal.tilt * 0.09, 5, dt)
       group.position.y = damp(group.position.y, Math.sin(t * 0.6) * 0.012, 3, dt)
     }
   })
