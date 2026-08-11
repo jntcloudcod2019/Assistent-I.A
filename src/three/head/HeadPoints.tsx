@@ -4,12 +4,41 @@ import * as THREE from 'three'
 
 import { useAlanStore } from '@/core/state/alanStore'
 import { audioSignal, damp } from '@/core/state/audioSignal'
+import { EYE_ASPECT } from './faceModel'
 import { buildHeadData } from './geometry'
 import { HEAD_FRAG, HEAD_VERT, LATTICE_FRAG, LATTICE_VERT } from './head.glsl'
 
-const COLOR_CORE = new THREE.Color('#dcfdff')
-const COLOR_EDGE = new THREE.Color('#0d84a6')
-const COLOR_ACCENT = new THREE.Color('#a8f4ff')
+// A rampa vai de azul elétrico profundo (sombra) a ciano brilhante (nó aceso),
+// em vez do ciano quase branco anterior — era ele que lavava o rosto inteiro.
+const COLOR_CORE = new THREE.Color('#8ff0ff')
+const COLOR_EDGE = new THREE.Color('#0a4fb0')
+const COLOR_ACCENT = new THREE.Color('#00bfff')
+/** Roxo neon da íris — deliberadamente fora da família ciano da cabeça, para
+ *  que o olhar seja a primeira coisa que o rosto comunica. Vermelho médio e
+ *  verde baixo mantêm o tom violeta mesmo quando o brilho satura o azul. */
+const COLOR_IRIS = new THREE.Color('#7b2cff')
+
+/** 10 piscadas por minuto — uma a cada 6 s. */
+const BLINK_INTERVAL = 6
+/** Jitter em torno do intervalo: cadência exata soa mecânica. */
+const BLINK_JITTER = 1.6
+/** Duração de uma piscada completa, em segundos. */
+const BLINK_DURATION = 0.16
+/** Fração da piscada gasta fechando; o resto abre. */
+const BLINK_CLOSE_RATIO = 0.38
+
+/**
+ * Curva da piscada: a pálpebra cai mais rápido do que sobe, como a real.
+ * Recebe 0..1 (progresso) e devolve 0..1 (fechamento).
+ */
+function blinkCurve(p: number): number {
+  if (p < BLINK_CLOSE_RATIO) {
+    const t = p / BLINK_CLOSE_RATIO
+    return t * t * (3 - 2 * t)
+  }
+  const t = (p - BLINK_CLOSE_RATIO) / (1 - BLINK_CLOSE_RATIO)
+  return 1 - t * t * (3 - 2 * t)
+}
 
 /** Alvos dos uniforms para cada fase da máquina de estados. */
 const PHASE_TARGETS = {
@@ -26,6 +55,8 @@ export function HeadPoints() {
 
   const groupRef = useRef<THREE.Group>(null)
   const scanRef = useRef(-0.6)
+  /** `progress` negativo = olhos abertos, esperando a próxima piscada. */
+  const blinkRef = useRef({ nextAt: 2, progress: -1 })
   /** Materialização ancorada no relógio real: se a aba ficar em segundo plano
    *  durante o boot, a cabeça já está formada quando o usuário volta, em vez de
    *  arrastar a animação por frames que nunca rodaram. */
@@ -42,11 +73,16 @@ export function HeadPoints() {
       uScanY: { value: -0.6 },
       uGlitch: { value: 0 },
       uReveal: { value: 0 },
-      uSize: { value: 3.4 },
+      // Nós pequenos e nítidos: nas referências quem desenha o rosto é a malha
+      // triangulada, e os vértices são só as marcas nos cruzamentos.
+      uSize: { value: 4.2 },
+      uEyeAspect: { value: EYE_ASPECT },
+      uBlink: { value: 0 },
       uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
       uColorCore: { value: COLOR_CORE },
       uColorEdge: { value: COLOR_EDGE },
       uColorAccent: { value: COLOR_ACCENT },
+      uColorIris: { value: COLOR_IRIS },
     }),
     [],
   )
@@ -62,6 +98,8 @@ export function HeadPoints() {
       aSeed: new THREE.BufferAttribute(data.seed, 1),
       aFade: new THREE.BufferAttribute(data.fade, 1),
       aArea: new THREE.BufferAttribute(data.area, 1),
+      aDetail: new THREE.BufferAttribute(data.detail, 1),
+      aGlow: new THREE.BufferAttribute(data.glow, 1),
     }
 
     const points = new THREE.BufferGeometry()
@@ -122,6 +160,21 @@ export function HeadPoints() {
     // Varredura sobe pela cabeça e reinicia; acelera durante o raciocínio.
     scanRef.current += dt * target.scanSpeed
     if (scanRef.current > 0.62) scanRef.current = -0.62
+
+    // Piscada. Roda no relógio da cena, não em setTimeout: se a aba ficar em
+    // segundo plano o ciclo pausa junto com o render, em vez de acumular
+    // piscadas atrasadas para disparar todas de uma vez na volta.
+    const blink = blinkRef.current
+    if (blink.progress < 0) {
+      if (t >= blink.nextAt) blink.progress = 0
+    } else {
+      blink.progress += dt / BLINK_DURATION
+      if (blink.progress >= 1) {
+        blink.progress = -1
+        blink.nextAt = t + BLINK_INTERVAL + (Math.random() * 2 - 1) * BLINK_JITTER
+      }
+    }
+    uniforms.uBlink.value = blink.progress < 0 ? 0 : blinkCurve(blink.progress)
 
     // Sinais contínuos vêm do objeto mutável, nunca de state React.
     const micLevel = phaseRef.current === 'listening' ? audioSignal.level : 0

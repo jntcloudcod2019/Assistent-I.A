@@ -43,7 +43,27 @@ export const REGION = {
   MOUTH_LINE: 6,
   BROW: 7,
   NOSTRIL: 8,
+  EYELID: 9,
 } as const
+
+/**
+ * Âncoras dos retalhos de detalhe. Olhos e boca ocupam uma fração ínfima do
+ * domínio (a elipse do olho é ~0,1% da área total), então uma grade uniforme
+ * lhes daria algumas dezenas de pontos. Estes centros são reamostrados à parte,
+ * em coordenadas polares locais.
+ */
+export const EYE_PATCH = { u: 0.44, v: 0.353, su: 0.19, sv: 0.0155 } as const
+
+/**
+ * Quanto a fenda palpebral é mais larga que alta, já em unidades de mundo.
+ *
+ * su e sv vivem em espaços diferentes — radianos ao redor da cabeça e altura do
+ * perfil — e por acaso davam quase o mesmo comprimento, o que produzia olhos
+ * perfeitamente circulares. A íris precisa deste fator para voltar a ser um
+ * círculo dentro de uma abertura amendoada.
+ */
+export const EYE_ASPECT = 2.8
+export const MOUTH_PATCH = { u: 0, v: 0.508, su: 0.32, sv: 0.032 } as const
 
 // ---------------------------------------------------------------------------
 // Perfil: seções transversais empilhadas
@@ -64,20 +84,33 @@ interface ProfileKey {
 }
 
 const PROFILE: ProfileKey[] = [
+  // Larguras derivadas de medidas antropométricas, normalizadas pela altura
+  // vértice→mento (H = 0.938 aqui):
+  //   largura máxima (parietal) 15.5/23 = 0.674 H  → meia-largura 0.316
+  //   bizigomática              13.7/23 = 0.596 H  → 0.280
+  //   bigonial (mandíbula)      10.5/23 = 0.457 H  → 0.214
+  //   mento                      4.5/23 = 0.196 H  → 0.092
+  // A versão anterior estava em 0.80 H de largura — 19% acima do cânone, o que
+  // dava uma cabeça larga demais. y(v) desce com inclinação quase constante
+  // para as linhas não se amontoarem em nenhuma faixa.
   { v: 0.0, y: 0.5, a: 0.01, bFront: 0.01, bBack: 0.01, cz: -0.03 },
-  { v: 0.05, y: 0.435, a: 0.15, bFront: 0.155, bBack: 0.17, cz: -0.03 },
-  { v: 0.12, y: 0.335, a: 0.245, bFront: 0.25, bBack: 0.29, cz: -0.03 },
-  { v: 0.2, y: 0.225, a: 0.295, bFront: 0.29, bBack: 0.34, cz: -0.025 },
-  { v: 0.28, y: 0.11, a: 0.31, bFront: 0.305, bBack: 0.355, cz: -0.015 },
-  { v: 0.35, y: 0.008, a: 0.308, bFront: 0.31, bBack: 0.35, cz: -0.005 }, // olhos
-  { v: 0.42, y: -0.095, a: 0.295, bFront: 0.31, bBack: 0.335, cz: 0.0 },
-  { v: 0.48, y: -0.185, a: 0.272, bFront: 0.3, bBack: 0.315, cz: 0.0 },
-  { v: 0.55, y: -0.29, a: 0.235, bFront: 0.285, bBack: 0.29, cz: -0.005 },
-  { v: 0.62, y: -0.4, a: 0.18, bFront: 0.255, bBack: 0.25, cz: -0.015 }, // queixo
-  { v: 0.67, y: -0.47, a: 0.14, bFront: 0.2, bBack: 0.205, cz: -0.03 },
-  { v: 0.72, y: -0.545, a: 0.125, bFront: 0.15, bBack: 0.165, cz: -0.045 },
-  { v: 0.8, y: -0.66, a: 0.12, bFront: 0.13, bBack: 0.145, cz: -0.055 },
-  { v: 1.0, y: -0.95, a: 0.128, bFront: 0.135, bBack: 0.15, cz: -0.06 },
+  { v: 0.03, y: 0.458, a: 0.15, bFront: 0.16, bBack: 0.18, cz: -0.03 },
+  { v: 0.08, y: 0.388, a: 0.238, bFront: 0.25, bBack: 0.29, cz: -0.03 },
+  { v: 0.15, y: 0.29, a: 0.29, bFront: 0.298, bBack: 0.352, cz: -0.03 },
+  { v: 0.22, y: 0.192, a: 0.31, bFront: 0.32, bBack: 0.382, cz: -0.025 },
+  { v: 0.28, y: 0.108, a: 0.316, bFront: 0.332, bBack: 0.395, cz: -0.018 }, // parietal
+  { v: 0.35, y: 0.01, a: 0.312, bFront: 0.338, bBack: 0.392, cz: -0.008 }, // olhos
+  { v: 0.42, y: -0.088, a: 0.292, bFront: 0.338, bBack: 0.378, cz: 0.0 }, // zigomático
+  { v: 0.48, y: -0.172, a: 0.268, bFront: 0.328, bBack: 0.355, cz: 0.0 },
+  { v: 0.55, y: -0.27, a: 0.238, bFront: 0.308, bBack: 0.325, cz: -0.005 },
+  { v: 0.62, y: -0.368, a: 0.196, bFront: 0.275, bBack: 0.282, cz: -0.015 }, // bigonial
+  { v: 0.67, y: -0.438, a: 0.118, bFront: 0.23, bBack: 0.23, cz: -0.028 }, // mento
+  { v: 0.72, y: -0.5, a: 0.132, bFront: 0.172, bBack: 0.188, cz: -0.045 },
+  // O pescoço abre em trapézio e ombros: terminar num tubo cilíndrico era o que
+  // fazia a silhueta inteira ler como lâmpada.
+  { v: 0.82, y: -0.615, a: 0.15, bFront: 0.178, bBack: 0.198, cz: -0.055 },
+  { v: 0.91, y: -0.72, a: 0.21, bFront: 0.198, bBack: 0.228, cz: -0.06 },
+  { v: 1.0, y: -0.84, a: 0.33, bFront: 0.228, bBack: 0.262, cz: -0.06 },
 ]
 
 /** Expoente da superelipse: 2 seria uma elipse pura e deixaria a cabeça ovoide. */
@@ -179,37 +212,47 @@ const FEATURES: FeatureNode[] = [
   { id: 'eyeSocket', parent: 'eye', u: 0, v: 0, su: 0.2, sv: 0.032, amp: -0.02, mirror: true },
   { id: 'lidUpper', parent: 'eye', u: 0, v: -0.019, su: 0.135, sv: 0.011, amp: 0.011, mirror: true },
   { id: 'lidLower', parent: 'eye', u: 0, v: 0.02, su: 0.135, sv: 0.01, amp: 0.008, mirror: true },
-  { id: 'brow', parent: 'eye', u: 0.005, v: -0.035, su: 0.2, sv: 0.026, theta: 0.12, amp: 0.018, mirror: true },
-  { id: 'glabella', u: 0, v: 0.32, su: 0.16, sv: 0.026, amp: 0.009 },
+  { id: 'brow', parent: 'eye', u: 0.005, v: -0.035, su: 0.21, sv: 0.028, theta: 0.12, amp: 0.024, mirror: true },
+  { id: 'glabella', u: 0, v: 0.32, su: 0.16, sv: 0.026, amp: 0.011 },
 
   // — Nariz ————————————————————————————————————————————————
-  { id: 'noseBridge', u: 0, v: 0.36, su: 0.075, sv: 0.055, amp: 0.026 },
-  { id: 'noseDorsum', parent: 'noseBridge', u: 0, v: 0.042, su: 0.065, sv: 0.04, amp: 0.044 },
-  { id: 'noseTip', parent: 'noseBridge', u: 0, v: 0.076, su: 0.07, sv: 0.024, amp: 0.07 },
-  { id: 'noseWing', parent: 'noseTip', u: 0.115, v: 0.01, su: 0.052, sv: 0.019, amp: 0.042, mirror: true },
-  { id: 'nostril', parent: 'noseTip', u: 0.076, v: 0.02, su: 0.026, sv: 0.01, amp: -0.032, mirror: true },
-  { id: 'noseBase', parent: 'noseTip', u: 0, v: 0.03, su: 0.09, sv: 0.012, amp: -0.02 },
+  { id: 'noseBridge', u: 0, v: 0.36, su: 0.078, sv: 0.055, amp: 0.03 },
+  { id: 'noseDorsum', parent: 'noseBridge', u: 0, v: 0.042, su: 0.068, sv: 0.04, amp: 0.06 },
+  { id: 'noseTip', parent: 'noseBridge', u: 0, v: 0.076, su: 0.074, sv: 0.024, amp: 0.098 },
+  { id: 'noseWing', parent: 'noseTip', u: 0.12, v: 0.01, su: 0.055, sv: 0.019, amp: 0.05, mirror: true },
+  { id: 'nostril', parent: 'noseTip', u: 0.08, v: 0.02, su: 0.028, sv: 0.01, amp: -0.038, mirror: true },
+  { id: 'noseBase', parent: 'noseTip', u: 0, v: 0.03, su: 0.095, sv: 0.012, amp: -0.024 },
 
   // — Boca —————————————————————————————————————————————————
-  { id: 'philtrum', u: 0, v: 0.478, su: 0.03, sv: 0.014, amp: -0.01 },
-  { id: 'lipUpper', u: 0, v: 0.497, su: 0.155, sv: 0.014, amp: 0.022 },
-  { id: 'cupid', parent: 'lipUpper', u: 0.048, v: -0.004, su: 0.045, sv: 0.01, amp: 0.01, mirror: true },
-  { id: 'mouthLine', parent: 'lipUpper', u: 0, v: 0.011, su: 0.175, sv: 0.006, amp: -0.019 },
-  { id: 'lipLower', parent: 'lipUpper', u: 0, v: 0.025, su: 0.145, sv: 0.017, amp: 0.026 },
-  { id: 'mouthCorner', parent: 'lipUpper', u: 0.2, v: 0.01, su: 0.05, sv: 0.014, amp: -0.011, mirror: true },
-  { id: 'mentolabial', parent: 'lipUpper', u: 0, v: 0.051, su: 0.13, sv: 0.016, amp: -0.016 },
-  { id: 'chin', u: 0, v: 0.585, su: 0.14, sv: 0.035, amp: 0.028 },
+  // Larguras acompanham a boca da referência: ~26% da largura do rosto.
+  { id: 'philtrum', u: 0, v: 0.478, su: 0.034, sv: 0.014, amp: -0.012 },
+  { id: 'lipUpper', u: 0, v: 0.497, su: 0.24, sv: 0.014, amp: 0.026 },
+  { id: 'cupid', parent: 'lipUpper', u: 0.055, v: -0.004, su: 0.05, sv: 0.01, amp: 0.012, mirror: true },
+  { id: 'mouthLine', parent: 'lipUpper', u: 0, v: 0.011, su: 0.27, sv: 0.006, amp: -0.022 },
+  { id: 'lipLower', parent: 'lipUpper', u: 0, v: 0.025, su: 0.22, sv: 0.017, amp: 0.03 },
+  { id: 'mouthCorner', parent: 'lipUpper', u: 0.3, v: 0.01, su: 0.06, sv: 0.014, amp: -0.013, mirror: true },
+  { id: 'mentolabial', parent: 'lipUpper', u: 0, v: 0.051, su: 0.16, sv: 0.016, amp: -0.019 },
+  { id: 'chin', u: 0, v: 0.585, su: 0.17, sv: 0.035, amp: 0.034 },
 
   // — Estrutura ————————————————————————————————————————————
-  { id: 'cheekbone', u: 0.66, v: 0.395, su: 0.22, sv: 0.045, theta: -0.2, amp: 0.02, mirror: true },
-  { id: 'cheekHollow', u: 0.55, v: 0.47, su: 0.16, sv: 0.045, amp: -0.014, mirror: true },
-  { id: 'nasolabial', u: 0.24, v: 0.487, su: 0.055, sv: 0.035, theta: 0.3, amp: -0.012, mirror: true },
-  { id: 'jawAngle', u: 0.95, v: 0.575, su: 0.22, sv: 0.045, amp: 0.016, mirror: true },
-  { id: 'temple', u: 0.8, v: 0.255, su: 0.2, sv: 0.055, amp: -0.014, mirror: true },
+  { id: 'cheekbone', u: 0.66, v: 0.395, su: 0.24, sv: 0.045, theta: -0.2, amp: 0.026, mirror: true },
+  { id: 'cheekHollow', u: 0.55, v: 0.47, su: 0.17, sv: 0.045, amp: -0.017, mirror: true },
+  { id: 'nasolabial', u: 0.26, v: 0.487, su: 0.06, sv: 0.035, theta: 0.3, amp: -0.014, mirror: true },
+  { id: 'temple', u: 0.8, v: 0.255, su: 0.2, sv: 0.055, amp: -0.016, mirror: true },
+
+  // — Linha da mandíbula ———————————————————————————————————
+  // A referência tem uma aresta contínua da orelha ao queixo. Uma gaussiana só
+  // não a percorre, então três nós cobrem o ramo, o corpo e o ângulo.
+  { id: 'jawAngle', u: 1.0, v: 0.6, su: 0.24, sv: 0.04, amp: 0.022, mirror: true },
+  { id: 'jawRamus', u: 0.66, v: 0.622, su: 0.24, sv: 0.032, theta: 0.18, amp: 0.02, mirror: true },
+  { id: 'jawBody', u: 0.32, v: 0.638, su: 0.22, sv: 0.03, amp: 0.017, mirror: true },
+  // Sombra sob o maxilar: sem ela a mandíbula não descola do pescoço.
+  { id: 'subMandible', u: 0.6, v: 0.678, su: 0.34, sv: 0.032, amp: -0.022, mirror: true },
 
   // — Orelhas ——————————————————————————————————————————————
-  { id: 'ear', u: 1.52, v: 0.375, su: 0.11, sv: 0.055, amp: 0.055, mirror: true },
-  { id: 'earInner', parent: 'ear', u: 0.03, v: 0, su: 0.05, sv: 0.03, amp: -0.032, mirror: true },
+  { id: 'ear', u: 1.52, v: 0.375, su: 0.12, sv: 0.065, amp: 0.078, mirror: true },
+  { id: 'earInner', parent: 'ear', u: 0.032, v: 0, su: 0.055, sv: 0.034, amp: -0.045, mirror: true },
+  { id: 'earLobe', parent: 'ear', u: 0.0, v: 0.062, su: 0.075, sv: 0.022, amp: 0.042, mirror: true },
 
   // — Cabelo ———————————————————————————————————————————————
   // su enorme = influência independente de u, uma calota em torno de toda a cabeça.
@@ -342,10 +385,10 @@ export function classifyRegion(u: number, v: number): number {
     return REGION.SCLERA
   }
 
-  if (ellipse(au - 0.44, v - 0.318, 0.2, 0.013) < 1) return REGION.BROW
+  if (ellipse(au - 0.44, v - 0.315, 0.21, 0.019) < 1) return REGION.BROW
   if (ellipse(au - 0.076, v - 0.456, 0.028, 0.011) < 1) return REGION.NOSTRIL
 
-  if (ellipse(u, v - 0.508, 0.19, 0.03) < 1) {
+  if (ellipse(u, v - 0.508, 0.32, 0.032) < 1) {
     return Math.abs(v - 0.508) < 0.0045 ? REGION.MOUTH_LINE : REGION.LIPS
   }
 
@@ -359,6 +402,41 @@ export function classifyRegion(u: number, v: number): number {
 // Rig
 // ---------------------------------------------------------------------------
 
+/**
+ * Concentração de luz por região do rosto.
+ *
+ * Nas referências low-poly o crânio é quase invisível e o brilho se acumula em
+ * sobrancelhas, olhos, nariz e boca. Este campo é o que reproduz essa
+ * hierarquia: soma de gaussianas nos pontos que devem acender.
+ */
+// Os sigmas acompanham de perto a extensão real de cada feição. Antes eram
+// ~3× maiores, e o halo resultante acendia bochecha e testa junto — era esse
+// entorno, não as feições, que dominava o rosto.
+const GLOW_SOURCES: Array<[u: number, v: number, su: number, sv: number, w: number]> = [
+  [0.44, 0.315, 0.2, 0.016, 1.0], // sobrancelhas
+  [0.44, 0.353, 0.15, 0.014, 0.95], // olhos
+  [0.0, 0.375, 0.06, 0.03, 0.55], // raiz do nariz
+  [0.0, 0.436, 0.07, 0.02, 0.9], // ponta do nariz
+  [0.09, 0.456, 0.045, 0.013, 0.85], // narinas
+  [0.0, 0.508, 0.24, 0.016, 0.9], // boca
+  [0.0, 0.6, 0.15, 0.025, 0.3], // queixo
+  [1.52, 0.375, 0.12, 0.05, 0.45], // orelhas
+  [0.75, 0.62, 0.24, 0.022, 0.28], // mandíbula
+]
+
+export function featureGlow(u: number, v: number): number {
+  const au = Math.abs(u)
+  let sum = 0
+  for (const [gu, gv, su, sv, w] of GLOW_SOURCES) {
+    // Fontes fora do plano sagital são bilaterais por construção.
+    const du = gu === 0 ? u : au - gu
+    const dv = v - gv
+    const m = (du / su) * (du / su) + (dv / sv) * (dv / sv)
+    if (m < 24) sum += w * Math.exp(-0.5 * m)
+  }
+  return Math.min(1, sum)
+}
+
 /** Peso de participação na rotação da mandíbula. */
 export function jawWeight(u: number, v: number): number {
   return (
@@ -368,7 +446,62 @@ export function jawWeight(u: number, v: number): number {
   )
 }
 
-/** Opacidade base — dissolve o pescoço na luz do pedestal. */
+/**
+ * Opacidade base. O busto dissolve cedo na luz do pedestal: mantido opaco até
+ * embaixo, o encontro do pescoço com os ombros virava a região mais densa e
+ * brilhante da cena e roubava a atenção do rosto.
+ */
 export function fadeWeight(v: number): number {
-  return 1 - smoothstep(0.72, 0.96, v)
+  return 1 - smoothstep(0.72, 0.94, v)
+}
+
+// ---------------------------------------------------------------------------
+// Avaliação avulsa da superfície
+// ---------------------------------------------------------------------------
+
+const H = 1e-3
+const profA = makeProfile()
+const profB = makeProfile()
+const tmp = {
+  p: new Float32Array(3),
+  uPrev: new Float32Array(3),
+  uNext: new Float32Array(3),
+  vPrev: new Float32Array(3),
+  vNext: new Float32Array(3),
+}
+
+/**
+ * P(u, v) num ponto arbitrário do domínio, fora da grade principal.
+ *
+ * A grade tira as normais dos vizinhos de graça; os retalhos polares não têm
+ * essa vizinhança, então aqui a normal-base sai de diferenças centrais
+ * calculadas na hora.
+ */
+export function evalSurface(u: number, v: number, out: Float32Array, offset: number) {
+  evalProfile(v, profA)
+  basePoint(u, profA, tmp.p, 0)
+  basePoint(u - H, profA, tmp.uPrev, 0)
+  basePoint(u + H, profA, tmp.uNext, 0)
+  basePoint(u, evalProfile(v - H, profB), tmp.vPrev, 0)
+  basePoint(u, evalProfile(v + H, profB), tmp.vNext, 0)
+
+  const ux = tmp.uNext[0] - tmp.uPrev[0]
+  const uy = tmp.uNext[1] - tmp.uPrev[1]
+  const uz = tmp.uNext[2] - tmp.uPrev[2]
+  const vx = tmp.vNext[0] - tmp.vPrev[0]
+  const vy = tmp.vNext[1] - tmp.vPrev[1]
+  const vz = tmp.vNext[2] - tmp.vPrev[2]
+
+  let nx = vy * uz - vz * uy
+  let ny = vz * ux - vx * uz
+  let nz = vx * uy - vy * ux
+  const len = Math.hypot(nx, ny, nz) || 1
+  nx /= len
+  ny /= len
+  nz /= len
+
+  const d = featureDisplacement(u, v)
+  out[offset] = tmp.p[0] + nx * d
+  out[offset + 1] = tmp.p[1] + ny * d
+  out[offset + 2] = tmp.p[2] + nz * d
 }

@@ -80,7 +80,7 @@ const RAIN_FRAG = /* glsl */ `
     float edge = smoothstep(0.0, 0.24, vUv.x) * smoothstep(1.0, 0.76, vUv.x);
     edge *= smoothstep(0.0, 0.14, vUv.y) * smoothstep(1.0, 0.86, vUv.y);
 
-    float a = glyph * fade * edge * (0.05 + uEnergy * 0.09);
+    float a = glyph * fade * edge * (0.028 + uEnergy * 0.06);
     if (a < 0.004) discard;
     gl_FragColor = vec4(uColor, a);
   }

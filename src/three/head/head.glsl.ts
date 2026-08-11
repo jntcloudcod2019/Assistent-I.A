@@ -25,6 +25,8 @@ const COMMON = /* glsl */ `
   attribute float aFade;
   attribute float aSeed;
   attribute float aArea;
+  attribute float aDetail;
+  attribute float aGlow;
 
   float hash11(float p) {
     p = fract(p * 0.1031);
@@ -103,6 +105,10 @@ export const HEAD_VERT = /* glsl */ `
 
   uniform float uSize;
   uniform float uPixelRatio;
+  /** Deve espelhar EYE_ASPECT em faceModel.ts. */
+  uniform float uEyeAspect;
+  /** 0 = olhos abertos, 1 = pálpebra totalmente fechada. */
+  uniform float uBlink;
 
   attribute float aRegion;
 
@@ -126,49 +132,132 @@ export const HEAD_VERT = /* glsl */ `
     // silhueta e o rosto vira uma máscara escura — é o lambert que modela
     // nariz, arcadas e lábios.
     float key = max(0.0, dot(vn, normalize(vec3(-0.4, 0.42, 0.85))));
-    float fill = max(0.0, dot(vn, normalize(vec3(0.6, -0.1, 0.5)))) * 0.28;
+    float fill = max(0.0, dot(vn, normalize(vec3(0.6, -0.1, 0.5)))) * 0.2;
     // Ambiente: sem ele, tudo que aponta para baixo — filtro do nariz, sob o
     // lábio, sob o queixo — vira um buraco preto e o rosto lê como caveira.
-    float ambient = front * 0.3;
+    float ambient = front * 0.32;
 
     float scan = exp(-pow((p.y - uScanY) * 13.0, 2.0));
     float pulse = 0.6 + 0.4 * sin(uTime * 1.6 + aSeed * 6.2831);
 
-    vBright = 0.16 + ambient + key * 0.62 + fill + fres * 0.45 + scan * 1.2 + uLevel * 0.5;
+    // Hierarquia das referências: o crânio é uma casca quase apagada e a luz se
+    // acumula nas feições. Iluminar tudo por igual é o que fazia a cabeça virar
+    // uma massa sólida em vez de um wireframe vazado.
+    float structural = 0.035 + ambient * 0.14 + key * 0.11 + fill * 0.3 + fres * 0.32;
+    float featureLit = aGlow * (0.5 + key * 0.9 + fres * 0.5);
+    vBright = structural + featureLit + scan * 0.22 + uLevel * 0.4;
+
+    // Nós acesos: uma minoria dos vértices brilha muito mais que o resto, que é
+    // o que dá a leitura de "pontos de dado" sobre a malha. Vale só para a
+    // malha e as partículas — nos retalhos densos viraria mancha branca.
+    float isPatch = step(0.001, aDetail);
+    float node = step(0.91, hash11(aSeed * 37.0 + 1.7)) * (1.0 - isPatch);
+    vBright += node * (0.28 + aGlow * 0.9);
 
     // As feições recebem piso ou teto de emissão em vez de acréscimo: assim
     // leem independentemente de para onde a normal aponta.
     float sizeScale = 1.0;
     float r = aRegion;
-    if (r > 7.5) {                                       // narina
+
+    // Nos retalhos oculares aDetail é o raio isotrópico da íris e aSeed carrega
+    // o ângulo polar da abertura — juntos dão pupila, fibras, limbo e reflexo.
+    // O ângulo precisa ser reprojetado no espaço isotrópico, senão o reflexo
+    // escorrega para fora da íris nas laterais.
+    float ang = aSeed * 6.2831;
+    float phi = atan(sin(ang), cos(ang) * uEyeAspect);
+    vec2 pol = vec2(cos(phi), sin(phi)) * aDetail;
+    vec2 gd = pol - vec2(-0.32, 0.34);
+    float glint = exp(-42.0 * dot(gd, gd));
+
+    // Piscada. aDetail é o raio isotrópico da íris, então a altura do ponto
+    // dentro da fenda precisa ser desfeita do fator de aspecto antes de saber
+    // quem já ficou debaixo da pálpebra.
+    float kIso = length(vec2(cos(ang) * uEyeAspect, sin(ang)));
+    float dvN = sin(ang) * (aDetail / max(kIso, 1e-4));   // -1 topo, +1 base
+    float lidEdge = mix(-1.25, 1.25, uBlink);
+    float covered = 1.0 - smoothstep(lidEdge - 0.06, lidEdge + 0.06, dvN);
+    // Linha de cílios acompanhando a borda da pálpebra.
+    float lashDist = (dvN - lidEdge) * 26.0;
+    float lash = exp(-lashDist * lashDist) * step(0.02, uBlink);
+    // Pálpebra fechada: pele um pouco mais escura, com os cílios marcados.
+    float lidShade = vBright * 0.72 * (1.0 - lash * 0.85);
+
+    // Regiões oculares viram pele enquanto cobertas, para que a cor azul da
+    // íris não vaze por cima da pálpebra fechada.
+    float regionOut = r;
+
+    if (r > 8.5) {                                       // pálpebra
+      vBright *= 0.1;
+      sizeScale = 1.15;
+    } else if (r > 7.5) {                                // narina
       vBright *= 0.1;
     } else if (r > 6.5) {                                // sobrancelha
-      vBright *= 0.3 + hash11(aSeed * 29.0) * 0.3;
-      sizeScale = 1.25;
+      // Na referência as sobrancelhas são arcos ACESOS, não sombras — é o que
+      // dá idade e expressão ao rosto. Piso alto com granulação por pelo.
+      vBright = max(vBright, 0.85 + hash11(aSeed * 29.0) * 0.55);
+      sizeScale = 1.35;
     } else if (r > 5.5) {                                // linha da boca
-      vBright *= 0.12;
-    } else if (r > 4.5) {                                // pupila
-      vBright = 0.05;
-      sizeScale = 1.1;
-    } else if (r > 3.5) {                                // íris
-      vBright = max(vBright, 2.1 + sin(uTime * 2.1) * 0.25);
-      sizeScale = 1.25;
+      vBright *= 0.06;
+    } else if (r > 4.5) {                                // pupila — núcleo do mecanismo
+      // Na referência o centro não é preto: é o ponto mais incandescente.
+      float rad = aDetail;
+      float core = exp(-rad * 7.0) * 1.1;
+      float innerRing = smoothstep(0.72, 1.0, abs(fract(rad * 9.0) - 0.5) * 2.0);
+      vBright = mix(0.3 + core + innerRing * 0.45 + glint * 1.2, lidShade, covered);
+      regionOut = mix(r, 0.0, step(0.5, covered));
+      sizeScale = 1.35;
+    } else if (r > 3.5) {                                // íris — diafragma mecânico
+      float rad = aDetail;
+
+      // Anéis concêntricos: acende a aresta de cada anel, não o seu miolo.
+      float ringPhase = rad * 4.6;
+      float band = floor(ringPhase);
+      float ringLine = smoothstep(0.72, 1.0, abs(fract(ringPhase) - 0.5) * 2.0);
+
+      // Arcos segmentados, cada anel girando em sentido e ritmo próprios — é o
+      // que faz ler como mecanismo de diafragma em vez de textura orgânica.
+      float dir = mod(band, 2.0) * 2.0 - 1.0;
+      float spin = uTime * (0.3 + band * 0.12) * dir;
+      float seg = step(0.32, fract(phi / 6.2831 * (5.0 + band * 3.0) + spin));
+
+      // Marcas radiais junto ao limbo, como escala de instrumento.
+      float ticks = step(0.8, fract(phi / 6.2831 * 44.0)) * smoothstep(0.95, 1.22, rad);
+
+      // Teto de brilho baixo por necessidade cromática: o roxo tem o azul já em
+      // 1.0, então qualquer ganho acima de ~1.2 satura o canal e o olho volta a
+      // ser um ponto branco — foi o que aconteceu com o azul antes.
+      float limbal = smoothstep(1.12, 1.3, rad);
+      float iris = (0.2 + ringLine * seg * 0.8 + ticks * 0.55) * (1.0 - limbal * 0.6) + glint * 1.1;
+      vBright = mix(iris, lidShade, covered);
+      regionOut = mix(r, 0.0, step(0.5, covered));
+      sizeScale = 1.35;
     } else if (r > 2.5) {                                // cabelo
       vBright *= 0.35 + hash11(aSeed * 13.0) * 0.95;
       sizeScale = 1.3;
     } else if (r > 1.5) {                                // lábios
-      vBright = max(vBright, 0.75 + uJaw * 0.8);
+      // Sem piso fixo: um valor constante achataria a boca num oval aceso.
+      // O realce cresce para o miolo do lábio e some na borda vermelhão.
+      float edge = smoothstep(1.0, 0.72, aDetail);
+      vBright *= 1.0 + edge * 0.5 + uJaw * 0.5;
     } else if (r > 0.5) {                                // esclera
-      vBright = max(vBright + 0.25, 1.3);
+      // Bem apagada: ela só emoldura o mecanismo, não compete com ele.
+      vBright = mix(min(vBright * 0.3, 0.24), lidShade, covered);
+      regionOut = mix(r, 0.0, step(0.5, covered));
     }
     vBright *= pulse * 0.3 + 0.78;
 
-    vRegion = r;
-    // aArea compensa o adensamento onde a seção transversal encolhe.
-    vAlpha = aFade * rv * aArea * mix(0.2, 1.0, front);
+    vRegion = regionOut;
+    // O verso continua visível — a cabeça é uma casca translúcida, não um
+    // sólido —, só que bem mais fraco que a frente. Além disso a malha de
+    // entorno recua em opacidade: só os retalhos e o que tem brilho de feição
+    // vêm à frente.
+    float meshFade = mix(0.3 + aGlow * 0.7, 1.0, isPatch);
+    vAlpha = aFade * rv * aArea * mix(0.32, 1.0, front) * meshFade;
 
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
-    gl_PointSize = uSize * uPixelRatio * sizeScale * (1.0 + vBright * 0.35) / max(0.001, -mv.z);
+    // Os retalhos são detalhe fino, não nós da constelação: pontos menores.
+    sizeScale *= (1.0 + node * 0.85) * mix(1.0, 0.45, isPatch);
+    gl_PointSize = uSize * uPixelRatio * sizeScale * (1.0 + vBright * 0.3) / max(0.001, -mv.z);
     gl_Position = projectionMatrix * mv;
   }
 `
@@ -179,20 +268,24 @@ export const HEAD_FRAG = /* glsl */ `
   uniform vec3 uColorCore;
   uniform vec3 uColorEdge;
   uniform vec3 uColorAccent;
+  uniform vec3 uColorIris;
 
   varying float vBright;
   varying float vRegion;
   varying float vAlpha;
 
   void main() {
-    // Sprite radial suave: o glow nasce da sobreposição, não de post-processing.
+    // Sprite compacto com halo curto: borda mole demais transforma os nós em
+    // bolhas e apaga a malha por trás deles.
     float d = length(gl_PointCoord - 0.5);
-    float a = smoothstep(0.5, 0.05, d);
+    float a = smoothstep(0.5, 0.22, d);
     a *= a;
 
     vec3 col = mix(uColorEdge, uColorCore, clamp(vBright * 0.6, 0.0, 1.0));
-    if (vRegion > 3.5 && vRegion < 4.5) col = mix(col, uColorAccent, 0.75);       // íris
-    else if (vRegion > 1.5 && vRegion < 2.5) col = mix(col, uColorAccent, 0.45);  // lábios
+    if (vRegion > 4.5 && vRegion < 5.5) col = mix(uColorIris, vec3(1.0), 0.3);    // núcleo
+    else if (vRegion > 3.5 && vRegion < 4.5) col = uColorIris;                    // íris
+    else if (vRegion > 0.5 && vRegion < 1.5) col = mix(col, vec3(0.86, 0.94, 1.0), 0.7); // esclera
+    else if (vRegion > 1.5 && vRegion < 2.5) col = mix(col, uColorAccent, 0.3);   // lábios
 
     float alpha = a * vAlpha;
     if (alpha < 0.004) discard;
@@ -215,7 +308,9 @@ export const LATTICE_VERT = /* glsl */ `
     float front = smoothstep(-0.4, 0.5, vn.z);
 
     vScan = exp(-pow((p.y - uScanY) * 9.0, 2.0));
-    vAlpha = aFade * rv * mix(0.02, 0.2, front);
+    // Arestas de entorno bem mais fracas que os contornos das feições, para o
+    // rosto não competir consigo mesmo.
+    vAlpha = aFade * rv * mix(0.08, 0.4, front) * (0.2 + aGlow * 1.15);
 
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }

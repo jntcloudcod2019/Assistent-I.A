@@ -9,7 +9,7 @@ export function HologramScene() {
   return (
     <Canvas
       dpr={[1, 2]}
-      camera={{ position: [0, -0.06, 3.0], fov: 34, near: 0.1, far: 30 }}
+      camera={{ position: [0, -0.12, 2.95], fov: 32, near: 0.1, far: 30 }}
       gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
       // Nenhuma luz na cena: todo material é aditivo e emissivo por conta própria.
       onCreated={({ gl }) => gl.setClearColor('#02080d', 1)}
@@ -22,8 +22,8 @@ export function HologramScene() {
 
       <EffectComposer>
         <Bloom
-          intensity={0.85}
-          luminanceThreshold={0.22}
+          intensity={0.7}
+          luminanceThreshold={0.38}
           luminanceSmoothing={0.4}
           mipmapBlur
           radius={0.72}

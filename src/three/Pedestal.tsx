@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import { useAlanStore } from '@/core/state/alanStore'
 import { audioSignal, damp } from '@/core/state/audioSignal'
 
-const BASE_Y = -1.0
+const BASE_Y = -1.18
 
 /** Anel de texto gravado na borda do emissor. */
 function makeRingTexture(): THREE.CanvasTexture {
