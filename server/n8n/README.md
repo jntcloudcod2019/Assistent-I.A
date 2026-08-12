@@ -55,18 +55,29 @@ transmite nela.
 2. **Importe** [`alan-chat.workflow.json`](alan-chat.workflow.json):
    menu `⋯` no canto superior direito → **Import from File**.
 
-3. **Credencial da Anthropic.** Abra o nó *Anthropic Chat Model* → campo
-   **Credential to connect with** → **Create new** → cole a chave `sk-ant-…`.
+3. **Credencial do Google Gemini.** Abra o nó *Google Gemini Chat Model* →
+   **Credential to connect with** → **Create new** → cole a chave obtida em
+   <https://aistudio.google.com/apikey>.
 
-   > Sua chave é da **Anthropic**, não da OpenAI — por isso o workflow usa o nó
-   > *Anthropic Chat Model*. Uma `sk-ant-…` em `OPENAI_API_KEY` daria 401.
+   > **Grátis e sem cartão.** No plano gratuito: 250 requisições/dia no Flash,
+   > 250 mil tokens/min e contexto de 1M.
    >
-   > Ela também foi colada em texto puro no chat. **Rotacione depois que
-   > funcionar.**
+   > Duas ressalvas que valem saber: no plano gratuito o Google pode usar as
+   > conversas para treinar seus modelos, e **ligar o faturamento no projeto
+   > apaga o plano gratuito** — a partir daí tudo passa a ser cobrado.
 
-4. **Escolha o modelo** no dropdown (a lista vem da sua conta). O JSON já vem
-   com um valor; se a sua chave não tiver acesso a ele, o dropdown mostra os
-   que tem.
+4. **Escolha o modelo** no campo *Model*. O JSON já vem com
+   `models/gemini-2.5-flash`, que é o equilíbrio certo de qualidade e limite.
+
+### Trocando de provedor
+
+O workflow não depende do Gemini: apague o nó de modelo, adicione outro
+(*Groq*, *Ollama*, *OpenRouter*, *Mistral*, *DeepSeek*…) e ligue-o na entrada
+`ai_languageModel` do Agent. O resto do workflow não muda.
+
+> Se você já importou a versão com Anthropic, **não precisa reimportar** —
+> reimportar registraria o webhook de novo. Apague só o nó *Anthropic Chat
+> Model*, adicione o *Google Gemini Chat Model*, ligue no Agent e publique.
 
 5. **Ative** no toggle *Inactive → Active*, canto superior direito. É o toggle
    que registra a URL de produção `/webhook/…`; sem ele só existe a de teste.

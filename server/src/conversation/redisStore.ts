@@ -22,17 +22,62 @@ export class RedisConversationStore implements ConversationStore {
   private redis: RedisClientType
   private ready: Promise<unknown>
 
+  /** Estado real da conexão, não a presença da variável de ambiente. */
+  private live = false
+  /** Evita encher o log: o cliente tenta reconectar em loop e erra a cada volta. */
+  private warned = false
+
   constructor(
     url: string,
     private readonly ttlSeconds: number,
     private readonly prefix = 'alan:conv:',
   ) {
     this.redis = createClient({ url })
-    this.ready = this.redis.connect().catch((error) => {
-      // Construtor não pode lançar assíncrono; o erro aparece na primeira
-      // operação, quando `resolveTier` devolve null e o nível 2 degrada.
-      console.warn(`[alan] Redis indisponível — nível 2 degradando para stateless.\n       Motivo: ${error instanceof Error ? error.message.split('\n')[0] : error}`)
+
+    // ESTE listener é obrigatório, não decorativo. O cliente é um
+    // EventEmitter, e um EventEmitter que emite 'error' sem ninguém ouvindo
+    // lança exceção não capturada — que derruba o processo inteiro. O
+    // `.catch()` abaixo só cobre a promessa do `connect()`; quando uma
+    // conexão JÁ estabelecida cai, o erro vem por aqui. Sem esta linha,
+    // desligar o Redis matava o servidor do ALAN junto.
+    this.redis.on('error', (error: Error) => {
+      this.live = false
+      if (this.warned) return
+      this.warned = true
+      console.warn(
+        `[alan] Redis fora do ar — nível 2 degradando para stateless.\n       Motivo: ${error.message.split('\n')[0]}`,
+      )
     })
+
+    this.redis.on('ready', () => {
+      this.live = true
+      this.warned = false
+    })
+    this.redis.on('end', () => {
+      this.live = false
+    })
+
+    this.ready = this.redis.connect().catch(() => {
+      // Já registrado pelo listener acima; aqui só impedimos a rejeição
+      // não tratada.
+    })
+  }
+
+  /** Usado pelo health check: liveness de verdade, medida na conexão. */
+  isLive(): boolean {
+    return this.live
+  }
+
+  /**
+   * Porta de entrada de toda operação.
+   *
+   * Com o Redis fora, as chamadas precisam falhar em silêncio e devolver algo
+   * neutro — o nível 2 é memória de curto prazo, e perder o cache degrada a
+   * conversa; lançar derrubaria o turno inteiro.
+   */
+  private async online(): Promise<boolean> {
+    await this.ready
+    return this.live
   }
 
   private key(id: string): string {
@@ -40,12 +85,12 @@ export class RedisConversationStore implements ConversationStore {
   }
 
   async exists(id: string): Promise<boolean> {
-    await this.ready
+    if (!(await this.online())) return false
     return (await this.redis.exists(this.key(id))) > 0
   }
 
   async clear(id: string): Promise<void> {
-    await this.ready
+    if (!(await this.online())) return
     await this.redis.del(this.key(id))
   }
 
@@ -59,8 +104,13 @@ export class RedisConversationStore implements ConversationStore {
     content: string
     metadata?: Record<string, unknown>
   }): Promise<StoredMessage> {
-    await this.ready
     const key = this.key(input.conversationId)
+
+    if (!(await this.online())) {
+      // Devolve a mensagem como se tivesse gravado: quem chamou precisa do
+      // objeto para seguir o turno, e o que se perde é só a persistência.
+      return toStored(input.conversationId, 0, input.content ?? '', input.role)
+    }
 
     const raw = await this.redis.get(key)
     const list: CachedMessage[] = raw ? (JSON.parse(raw) as CachedMessage[]) : []
@@ -73,7 +123,7 @@ export class RedisConversationStore implements ConversationStore {
   }
 
   async history(conversationId: string): Promise<StoredMessage[]> {
-    await this.ready
+    if (!(await this.online())) return []
     const raw = await this.redis.get(this.key(conversationId))
     if (!raw) return []
     const list = JSON.parse(raw) as CachedMessage[]

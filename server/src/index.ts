@@ -296,6 +296,32 @@ async function runN8nTurn(input: {
   send('done', { conversationId: conversationId ?? null })
 }
 
+/**
+ * Sobe a porta, tolerando a corrida do `tsx watch`.
+ *
+ * Salvar um arquivo reinicia o processo, e por alguns instantes a instância
+ * antiga ainda segura a 3001 — o novo bind falha com EADDRINUSE. Antes isso
+ * caía no `process.exit(1)` e matava o servidor de vez: o watcher não sobe
+ * outro, então a porta ficava morta até alguém reiniciar à mão, e o front
+ * passava a receber 500 do proxy do Vite. Uma corrida transitória não pode
+ * ser fatal; só desiste se a porta seguir ocupada de verdade.
+ */
+async function listenWithRetry(attempts = 12, delayMs = 400): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await app.listen({ port: env.port, host: '127.0.0.1' })
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code
+      if (code !== 'EADDRINUSE' || attempt >= attempts) throw error
+      if (attempt === 1) {
+        console.log(`  porta ${env.port} ocupada — esperando a instância anterior sair…`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
+}
+
 async function main() {
   const legacyStore = await createStore(env.databaseUrl)
 
@@ -310,7 +336,7 @@ async function main() {
   }
 
   llm = hasModel
-    ? new OpenAiProvider(env.openaiKey!, env.openaiModel)
+    ? new OpenAiProvider(env.llmKey!, env.llmModel, env.llmBaseUrl)
     : new EchoProvider()
 
   if (hasVoice) {
@@ -325,7 +351,7 @@ async function main() {
     registerVoiceRoute(app, stt)
   }
 
-  await app.listen({ port: env.port, host: '127.0.0.1' })
+  await listenWithRetry()
 
   console.log(`\n  ALAN · servidor em http://127.0.0.1:${env.port}`)
   console.log(`  canal     : ${hasN8n ? `n8n (${new URL(env.n8nChatWebhookUrl!).host})` : 'direto (OpenAI)'}`)

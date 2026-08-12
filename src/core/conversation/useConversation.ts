@@ -92,7 +92,17 @@ export function useConversation() {
       return
     }
 
-    if (failed || !answer.trim()) {
+    if (failed) {
+      // Calar depois de uma falha faz o ALAN parecer travado: quem perguntou
+      // por voz fica esperando uma resposta que nunca vem. Ele avisa que
+      // falhou — curto e em português. O detalhe técnico costuma vir em
+      // inglês e cheio de termo de API; isso fica no chat, para ler com
+      // calma, e não lido em voz alta.
+      await speak('Não consegui responder agora. O detalhe está no chat.')
+      return
+    }
+
+    if (!answer.trim()) {
       store.setPhase('idle')
       return
     }

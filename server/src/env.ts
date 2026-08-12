@@ -65,8 +65,17 @@ export const env = {
   /** Classificação de memória (nível 1/2/3) no n8n. Ausente = tudo stateless. */
   n8nClassifyWebhookUrl: optional('N8N_CLASSIFY_WEBHOOK_URL'),
 
-  openaiKey: optional('OPENAI_API_KEY'),
-  openaiModel: optional('OPENAI_MODEL') ?? 'gpt-4o-mini',
+  /**
+   * Modelo do canal direto, em qualquer API compatível com a da OpenAI.
+   *
+   * Os nomes `LLM_*` vieram depois: `OPENAI_*` passou a mentir quando a mesma
+   * configuração começou a servir Gemini, Groq e Ollama. Os antigos seguem
+   * funcionando como apelido para não quebrar `.env` já escritos.
+   */
+  llmKey: optional('LLM_API_KEY') ?? optional('OPENAI_API_KEY'),
+  llmModel: optional('LLM_MODEL') ?? optional('OPENAI_MODEL') ?? 'gemini-2.5-flash',
+  /** Vazio fala com a OpenAI; preenchido, com qualquer outro compatível. */
+  llmBaseUrl: optional('LLM_BASE_URL') ?? optional('OPENAI_BASE_URL'),
 
   /**
    * Transcrição local (whisper.cpp). Ausente = canal de voz desligado e a
@@ -78,7 +87,7 @@ export const env = {
 }
 
 export const hasDatabase = Boolean(env.databaseUrl)
-export const hasModel = Boolean(env.openaiKey)
+export const hasModel = Boolean(env.llmKey)
 export const hasRedis = Boolean(env.redisUrl)
 export const hasN8n = Boolean(env.n8nChatWebhookUrl)
 export const hasVoice = Boolean(env.whisperModel)

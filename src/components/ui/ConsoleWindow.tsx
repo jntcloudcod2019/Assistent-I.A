@@ -6,10 +6,11 @@ import { useSessionStore, searchSessions, relativeTime } from '@/core/state/sess
 import { useConversation } from '@/core/conversation/useConversation'
 import { useVoiceInput } from '@/core/speech/stt/useVoiceInput'
 import { httpAgent } from '@/core/agent/httpAgent'
-import { useDraggable } from '@/core/ui/useDraggable'
+import { useFloatingWindow } from '@/core/ui/useFloatingWindow'
 
 /**
- * A janela de conversa: menu, transcrição e entrada numa peça só, móvel.
+ * A janela de conversa: menu, transcrição e entrada numa peça só — móvel,
+ * redimensionável e recolhível.
  *
  * As camadas ficam neste arquivo de propósito, como subcomponentes locais:
  * são partes de uma coisa só e não têm uso fora daqui.
@@ -17,31 +18,48 @@ import { useDraggable } from '@/core/ui/useDraggable'
 export function ConsoleWindow() {
   const messages = useAlanStore((s) => s.messages)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [minimized, setMinimized] = useState(false)
 
-  const { ref, style, dragging, handleProps } = useDraggable<HTMLDivElement>({
-    // Canto inferior direito, que é onde ela vivia — só que agora é ponto de
-    // partida, não destino fixo.
-    initial: useCallback(
-      (size: { width: number; height: number }, viewport: { width: number; height: number }) => ({
-        x: viewport.width - size.width - 20,
-        y: viewport.height - size.height - 20,
-      }),
-      [],
-    ),
-  })
+  const { ref, style, dragging, resizing, handleProps, resizeHandleProps, releaseHeight } =
+    useFloatingWindow<HTMLDivElement>({
+      initialWidth: Math.min(380, window.innerWidth - 16),
+      // Canto inferior direito, que é onde ela vivia — só que agora é ponto de
+      // partida, não destino fixo.
+      initial: useCallback(
+        (size: { width: number; height: number }, viewport: { width: number; height: number }) => ({
+          x: viewport.width - size.width - 20,
+          y: viewport.height - size.height - 20,
+        }),
+        [],
+      ),
+    })
 
   useSessionSync()
+
+  const toggleMinimized = () => {
+    setMinimized((wasMinimized) => {
+      // Ao recolher, a altura explícita é abandonada: mantê-la deixaria um
+      // vão vazio embaixo do cabeçalho, do tamanho do que foi escondido.
+      if (!wasMinimized) releaseHeight()
+      return !wasMinimized
+    })
+  }
+
+  const collapsed = minimized
 
   return (
     <div
       ref={ref}
-      style={style}
+      style={{ ...style, ...(collapsed ? { height: 'auto' } : {}) }}
       className={clsx(
-        'hud-panel fixed z-20 flex w-[min(380px,calc(100vw-16px))] flex-col',
-        // Sem transição durante o arraste: interpolar posição contra o
-        // ponteiro produz aquele atraso elástico que parece travamento.
-        dragging ? 'cursor-grabbing select-none' : 'transition-shadow',
-        dragging && 'shadow-[0_0_40px_-8px_var(--color-holo-400)]',
+        'hud-panel fixed z-20 flex flex-col',
+        // Teto só enquanto a altura é automática; depois de redimensionada,
+        // quem manda é o tamanho escolhido.
+        style.height === undefined && 'max-h-[70vh]',
+        // Sem transição durante o gesto: interpolar contra o ponteiro produz
+        // aquele atraso elástico que parece travamento.
+        dragging || resizing ? 'select-none' : 'transition-shadow',
+        dragging && 'cursor-grabbing shadow-[0_0_40px_-8px_var(--color-holo-400)]',
       )}
       aria-label="Console do ALAN"
     >
@@ -49,12 +67,52 @@ export function ConsoleWindow() {
         count={messages.length}
         dragging={dragging}
         handleProps={handleProps}
-        menuOpen={menuOpen}
+        menuOpen={menuOpen && !collapsed}
         onToggleMenu={() => setMenuOpen((open) => !open)}
+        minimized={collapsed}
+        onToggleMinimized={toggleMinimized}
       />
-      {menuOpen && <SessionMenu onClose={() => setMenuOpen(false)} />}
-      {!menuOpen && messages.length > 0 && <Transcript />}
-      <InputBar />
+
+      {!collapsed && (
+        <>
+          {menuOpen && <SessionMenu onClose={() => setMenuOpen(false)} />}
+          {!menuOpen && messages.length > 0 && <Transcript />}
+          <InputBar />
+          <ResizeGrip handleProps={resizeHandleProps} active={resizing} />
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Alça de redimensionamento no canto inferior direito.
+ *
+ * Um canto só, e não oito bordas: pega as duas dimensões num gesto e mantém o
+ * canto superior esquerdo fixo — que é o que permite clampar contra a borda
+ * da tela com uma conta simples, sem reposicionar a janela no meio do arrasto.
+ */
+function ResizeGrip({
+  handleProps,
+  active,
+}: {
+  handleProps: React.HTMLAttributes<HTMLElement> & { style: React.CSSProperties }
+  active: boolean
+}) {
+  return (
+    <div
+      {...handleProps}
+      role="separator"
+      aria-label="Redimensionar janela"
+      className={clsx(
+        'absolute right-0 bottom-0 grid h-4 w-4 cursor-nwse-resize place-items-center',
+        active ? 'text-holo-200' : 'text-holo-700 hover:text-holo-300',
+      )}
+    >
+      {/* Três riscos na diagonal: a convenção que diz "puxe daqui". */}
+      <svg viewBox="0 0 10 10" className="h-2.5 w-2.5" stroke="currentColor" strokeWidth={1}>
+        <path d="M9 1 1 9M9 4.5 4.5 9M9 8 8 9" strokeLinecap="round" />
+      </svg>
     </div>
   )
 }
@@ -85,18 +143,26 @@ function TitleBar({
   handleProps,
   menuOpen,
   onToggleMenu,
+  minimized,
+  onToggleMinimized,
 }: {
   count: number
   dragging: boolean
   handleProps: React.HTMLAttributes<HTMLElement> & { style: React.CSSProperties }
   menuOpen: boolean
   onToggleMenu: () => void
+  minimized: boolean
+  onToggleMinimized: () => void
 }) {
   return (
     <header
       {...handleProps}
+      // Recolhida, a janela é só este cabeçalho — e um duplo clique nele é o
+      // gesto que todo mundo já tenta antes de procurar o botão.
+      onDoubleClick={onToggleMinimized}
       className={clsx(
-        'flex items-center justify-between gap-2 border-b border-white/5 px-3 py-2',
+        'flex shrink-0 items-center justify-between gap-2 px-3 py-2',
+        !minimized && 'border-b border-white/5',
         dragging ? 'cursor-grabbing' : 'cursor-grab',
       )}
     >
@@ -119,7 +185,28 @@ function TitleBar({
         </button>
         <span className="hud-label">ALAN</span>
       </span>
-      {count > 0 && !menuOpen && <span className="hud-label">{count} msg</span>}
+
+      <span className="flex items-center gap-2">
+        {count > 0 && !menuOpen && <span className="hud-label">{count} msg</span>}
+        <button
+          type="button"
+          onClick={onToggleMinimized}
+          aria-label={minimized ? 'Restaurar janela' : 'Minimizar janela'}
+          aria-expanded={!minimized}
+          title={minimized ? 'Restaurar' : 'Minimizar'}
+          className="grid h-5 w-5 place-items-center rounded-sm text-holo-700 transition-colors hover:text-holo-200"
+        >
+          {/* Traço quando aberta (recolher), chevron quando recolhida
+              (expandir): o ícone mostra o que vai acontecer, não o estado. */}
+          <svg viewBox="0 0 12 12" className="h-3 w-3" stroke="currentColor" strokeWidth={1.4} fill="none">
+            {minimized ? (
+              <path d="M2.5 7.5 6 4l3.5 3.5" strokeLinecap="round" strokeLinejoin="round" />
+            ) : (
+              <path d="M2.5 6h7" strokeLinecap="round" />
+            )}
+          </svg>
+        </button>
+      </span>
     </header>
   )
 }
@@ -239,9 +326,12 @@ function Transcript() {
     <div
       ref={scrollRef}
       // `min-h-0` é o que faz a rolagem existir: num container flex, o padrão
-      // é `min-height: auto`, que deixa o filho crescer além do `max-h` em vez
+      // é `min-height: auto`, que deixa o filho crescer além do limite em vez
       // de rolar. Sem isto a janela estica sem fim numa conversa longa.
-      className="flex max-h-[52vh] min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3"
+      //
+      // O teto vive na janela (`max-h` quando a altura é automática, ou a
+      // altura escolhida no redimensionamento); aqui basta ocupar o que sobrar.
+      className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3"
       onScroll={(e) => {
         const el = e.currentTarget
         pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48

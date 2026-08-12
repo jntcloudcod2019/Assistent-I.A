@@ -2,13 +2,23 @@ import OpenAI from 'openai'
 
 import type { ChatMessage, LlmProvider, LlmUsage } from './types.js'
 
+/**
+ * Provedor para qualquer API compatível com a da OpenAI.
+ *
+ * O protocolo `/chat/completions` virou o denominador comum: Gemini, Groq,
+ * OpenRouter, DeepSeek, Mistral e o Ollama local expõem todos o mesmo formato.
+ * Por isso o que troca o modelo aqui é uma URL, não uma classe nova —
+ * `baseUrl` vazio fala com a OpenAI, preenchido fala com o resto.
+ *
+ * Presets estão em `.env.example`.
+ */
 export class OpenAiProvider implements LlmProvider {
   readonly model: string
   private client: OpenAI
   private usage: LlmUsage | null = null
 
-  constructor(apiKey: string, model: string) {
-    this.client = new OpenAI({ apiKey })
+  constructor(apiKey: string, model: string, baseUrl?: string) {
+    this.client = new OpenAI({ apiKey, ...(baseUrl ? { baseURL: baseUrl } : {}) })
     this.model = model
   }
 
@@ -74,7 +84,7 @@ export class EchoProvider implements LlmProvider {
   async *stream(messages: ChatMessage[], signal: AbortSignal): AsyncIterable<string> {
     const startedAt = Date.now()
     const last = messages.filter((m) => m.role === 'user').at(-1)?.content ?? ''
-    const reply = `Nenhum modelo está configurado no servidor, então não consigo pensar sobre "${last}". Defina OPENAI_API_KEY no arquivo .env para me dar um cérebro.`
+    const reply = `Nenhum modelo está configurado no servidor, então não consigo pensar sobre "${last}". Defina LLM_API_KEY no arquivo .env — o Gemini e o Groq dão chave grátis, sem cartão.`
 
     for (const word of reply.split(' ')) {
       if (signal.aborted) break

@@ -32,19 +32,13 @@
     },
     {
       "parameters": {
-        "model": {
-          "__rl": true,
-          "mode": "list",
-          "value": "claude-opus-5"
-        },
-        "options": {
-          "maxTokensToSample": 1024
-        }
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
       },
       "id": "b1a7c2e0-0003-4a10-9f01-alanchatmodl",
-      "name": "Anthropic Chat Model",
-      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
-      "typeVersion": 1.5,
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
       "position": [180, 200]
     }
   ],
@@ -52,7 +46,7 @@
     "Webhook": {
       "main": [[{ "node": "ALAN", "type": "main", "index": 0 }]]
     },
-    "Anthropic Chat Model": {
+    "Google Gemini Chat Model": {
       "ai_languageModel": [[{ "node": "ALAN", "type": "ai_languageModel", "index": 0 }]]
     }
   },
