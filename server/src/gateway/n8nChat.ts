@@ -22,7 +22,53 @@ import { toTier, type ConversationTier } from '../conversation/tiers.js'
  */
 
 const TIMEOUT_MS = 60_000
-const MAX_ATTEMPTS = 2
+const MAX_ATTEMPTS = 3
+
+/** Pausa antes de repetir. Curta: o pico que causa o 503 costuma durar menos. */
+const RETRY_DELAY_MS = 700
+
+/**
+ * A falha vale uma segunda tentativa?
+ *
+ * Na camada gratuita do Gemini, o modelo mais novo é o mais disputado e devolve
+ * 503 "high demand" com frequência — foi 2 em 4 turnos num teste. Isso não é
+ * defeito da configuração nem erro de quem perguntou: é fila do provedor, e
+ * some sozinho na tentativa seguinte.
+ *
+ * A lista é deliberadamente curta. Repetir um 404 de modelo inexistente ou um
+ * 401 de credencial só atrasaria a mensagem de erro que a pessoa precisa ler.
+ */
+function isTransient(message: string): boolean {
+  const m = message.toLowerCase()
+  return (
+    m.includes('503') ||
+    m.includes('overloaded') ||
+    m.includes('high demand') ||
+    m.includes('unavailable') ||
+    m.includes('429') ||
+    m.includes('rate limit') ||
+    m.includes('timeout') ||
+    m.includes('etimedout')
+  )
+}
+
+/**
+ * Saúde do canal, observada pelo tráfego real.
+ *
+ * O health check **não pode** sondar `alan/chat` com um POST: o webhook
+ * executa o workflow inteiro, e com o Gemini conectado isso gasta uma
+ * requisição da cota gratuita (250/dia) a cada consulta. Um painel aberto
+ * esgotaria a cota do dia sozinho, sem ninguém conversar.
+ *
+ * Então o sinal vem do uso: cada turno real registra sucesso ou falha aqui, e
+ * a sonda apenas lê. É o padrão de health passivo — o tráfego que já existe
+ * responde melhor que um teste sintético, e de graça.
+ */
+export const n8nHealth = {
+  lastOkAt: 0,
+  lastFailAt: 0,
+  lastError: '',
+}
 
 /** Chamada de classificação curta — não precisa do teto do turno inteiro. */
 const CLASSIFY_TIMEOUT_MS = 10_000
@@ -32,6 +78,14 @@ export interface N8nTurnPayload {
   tier: number | null
   userText: string
   history: StoredMessage[]
+  /**
+   * Estado das dependências, medido por este processo.
+   *
+   * O workflow do n8n não enxerga Redis, Mongo nem whisper — quem sonda é o
+   * servidor. Sem este campo, perguntar "como está o banco?" faria o modelo
+   * inventar uma resposta plausível.
+   */
+  systemState?: string
 }
 
 export interface N8nFrame {
@@ -189,15 +243,59 @@ export async function* chatWithN8n(
         throw new Error(`n8n respondeu ${response.status}`)
       }
 
+      // HTTP 200 não significa turno bem-sucedido: o n8n devolve 200 e manda o
+      // erro do modelo dentro do stream. Só quem vê todos os quadros sabe se
+      // saiu resposta, e é por isso que o registro de saúde vive aqui e não em
+      // quem consome — marcar sucesso ao fim do stream sobrescrevia a falha.
+      let failure: N8nFrame | null = null
+      let failureText = ''
+      let gotToken = false
+
       for await (const frame of parseFrames(response, controller.signal)) {
         emitted = true
+
+        if (frame.event === 'error') {
+          // O erro é SEGURADO, não repassado na hora: se nenhum token saiu, o
+          // turno ainda pode ser refeito, e entregar o erro agora fecharia
+          // essa porta. Só é emitido quando desistimos de vez.
+          failure = frame
+          try {
+            failureText = String((JSON.parse(frame.data) as { message?: unknown }).message ?? 'erro no workflow')
+          } catch {
+            failureText = 'erro no workflow'
+          }
+          continue
+        }
+
+        if (frame.event === 'token') gotToken = true
         yield frame
       }
+
+      if (!failure) {
+        n8nHealth.lastOkAt = Date.now()
+        return
+      }
+
+      // Repete quando a falha é passageira E nada de útil saiu ainda. Um 503
+      // de "high demand" no nível gratuito é comum e some numa segunda
+      // tentativa; entregá-lo direto transformaria um soluço do provedor em
+      // conversa perdida. Com token já entregue não há volta: repetir
+      // duplicaria a metade que a pessoa leu.
+      if (isTransient(failureText) && !gotToken && attempt < MAX_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+        continue
+      }
+
+      n8nHealth.lastFailAt = Date.now()
+      n8nHealth.lastError = failureText.split('\n')[0].slice(0, 160)
+      yield failure
       return
     } catch (error) {
       if (signal.aborted) return
       // Só repete se nada ainda foi entregue; meio-stream não tem volta.
       if (emitted || attempt === MAX_ATTEMPTS) {
+        n8nHealth.lastFailAt = Date.now()
+        n8nHealth.lastError = error instanceof Error ? error.message.split('\n')[0] : 'falha desconhecida'
         throw error instanceof Error ? error : new Error('falha desconhecida no canal n8n')
       }
     } finally {

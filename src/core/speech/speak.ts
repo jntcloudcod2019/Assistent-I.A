@@ -1,5 +1,5 @@
 import { audioSignal, damp } from '@/core/state/audioSignal'
-import { useAlanStore } from '@/core/state/alanStore'
+import { useAlanStore, type AlanPhase } from '@/core/state/alanStore'
 import { REST, textToVisemes, type Viseme } from './visemes'
 
 /**
@@ -25,6 +25,15 @@ export interface SpeakOptions {
   volume?: number
   /** Chamado quando a fala termina ou é cancelada. */
   onEnd?: () => void
+  /**
+   * Fase para onde voltar ao terminar. Padrão `idle`.
+   *
+   * Existe para a fala de espera ("um momento"), dita no meio do raciocínio:
+   * ela precisa de `speaking` enquanto dura, senão o shader zera a mandíbula e
+   * a boca fica parada — mas voltar para `idle` faria o rosto parecer que já
+   * respondeu, enquanto o turno ainda está em curso.
+   */
+  restorePhase?: AlanPhase
 }
 
 /** Gesto agendado num instante da fala. */
@@ -88,6 +97,17 @@ function extractBeats(text: string): Beat[] {
 let activeUtterance: SpeechSynthesisUtterance | null = null
 let rafId = 0
 
+/**
+ * Selo de quem está falando agora.
+ *
+ * `speechSynthesis.cancel()` dispara o `onend` da fala interrompida de forma
+ * assíncrona — ele pode chegar DEPOIS de a próxima fala já ter começado. Sem
+ * este selo, o `finish()` da fala velha reverteria a fase por cima da nova: a
+ * fala de espera, ao ser cortada, jogaria o rosto de volta para "pensando"
+ * enquanto ALAN já estava respondendo, e a mandíbula travaria.
+ */
+let generation = 0
+
 export function isSpeechSupported(): boolean {
   return typeof window !== 'undefined' && 'speechSynthesis' in window
 }
@@ -97,6 +117,8 @@ export function stopSpeaking() {
   if (rafId) cancelAnimationFrame(rafId)
   rafId = 0
   activeUtterance = null
+  // Invalida quem estava falando: o `onend` atrasado não manda mais em nada.
+  generation++
   if (isSpeechSupported()) window.speechSynthesis.cancel()
   relax()
 }
@@ -225,11 +247,14 @@ export function speak(text: string, options: SpeakOptions = {}): Promise<void> {
     const finish = () => {
       if (finished) return
       finished = true
-      store.setPhase('idle')
+      // Só o falante atual mexe na fase. Um `onend` que chega tarde, de uma
+      // fala já cancelada, não pode desfazer o estado de quem veio depois.
+      if (mine === generation) store.setPhase(options.restorePhase ?? 'idle')
       options.onEnd?.()
       // O laço continua alguns quadros para a boca fechar em vez de travar.
     }
 
+    const mine = ++generation
     store.setPhase('speaking')
 
     if (!isSpeechSupported()) {

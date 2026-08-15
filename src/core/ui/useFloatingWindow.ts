@@ -30,6 +30,15 @@ export interface Size {
   height: number
 }
 
+/** `height` ausente significa altura automática, seguindo o conteúdo. */
+export interface WindowStyle {
+  left: number
+  top: number
+  width: number
+  height?: number
+  visibility?: 'hidden'
+}
+
 interface Options {
   /** Largura inicial; a altura começa automática, seguindo o conteúdo. */
   initialWidth: number
@@ -58,8 +67,14 @@ export function useFloatingWindow<T extends HTMLElement>({ initialWidth, initial
   // manda no tamanho é quem arrastou, não a conversa.
   const [height, setHeight] = useState<number | null>(null)
 
+  // Espelhados em ref porque as guardas de `pointermove` precisam do valor
+  // AGORA: `setState` só aparece depois do commit, e um movimento que chegue
+  // no mesmo quadro do `pointerdown` seria descartado. O state existe só para
+  // a aparência (cursor, sombra), onde o atraso de um quadro não se nota.
   const [dragging, setDragging] = useState(false)
   const [resizing, setResizing] = useState(false)
+  const draggingRef = useRef(false)
+  const resizingRef = useRef(false)
 
   const grabRef = useRef<Point>({ x: 0, y: 0 })
   const resizeRef = useRef<{ x: number; y: number; width: number; height: number }>({
@@ -82,7 +97,7 @@ export function useFloatingWindow<T extends HTMLElement>({ initialWidth, initial
   // o navegador suspende em aba de segundo plano.
   useLayoutEffect(() => {
     const el = ref.current
-    if (!el || !position || dragging || resizing) return
+    if (!el || !position || draggingRef.current || resizingRef.current) return
     const rect = el.getBoundingClientRect()
     const next = clampPosition(position, { width: rect.width, height: rect.height })
     // A guarda de igualdade impede isto de virar loop infinito de render.
@@ -123,12 +138,13 @@ export function useFloatingWindow<T extends HTMLElement>({ initialWidth, initial
     const rect = el.getBoundingClientRect()
     grabRef.current = { x: event.clientX - rect.left, y: event.clientY - rect.top }
     event.currentTarget.setPointerCapture(event.pointerId)
+    draggingRef.current = true
     setDragging(true)
   }, [])
 
   const onDragMove = useCallback(
     (event: React.PointerEvent) => {
-      if (!dragging) return
+      if (!draggingRef.current) return
       const el = ref.current
       if (!el) return
       const rect = el.getBoundingClientRect()
@@ -139,11 +155,12 @@ export function useFloatingWindow<T extends HTMLElement>({ initialWidth, initial
         ),
       )
     },
-    [dragging],
+    [],
   )
 
   const onDragEnd = useCallback((event: React.PointerEvent) => {
     event.currentTarget.releasePointerCapture(event.pointerId)
+    draggingRef.current = false
     setDragging(false)
   }, [])
 
@@ -158,12 +175,13 @@ export function useFloatingWindow<T extends HTMLElement>({ initialWidth, initial
     resizeRef.current = { x: event.clientX, y: event.clientY, width: rect.width, height: rect.height }
     event.currentTarget.setPointerCapture(event.pointerId)
     event.preventDefault()
+    resizingRef.current = true
     setResizing(true)
   }, [])
 
   const onResizeMove = useCallback(
     (event: React.PointerEvent) => {
-      if (!resizing || !position) return
+      if (!resizingRef.current || !position) return
       const start = resizeRef.current
       // O teto é a distância até a borda: redimensionar não pode empurrar a
       // janela para fora, e como o canto de origem está fixo, o limite é o
@@ -173,11 +191,12 @@ export function useFloatingWindow<T extends HTMLElement>({ initialWidth, initial
       setWidth(Math.min(Math.max(MIN_WIDTH, start.width + (event.clientX - start.x)), maxWidth))
       setHeight(Math.min(Math.max(MIN_HEIGHT, start.height + (event.clientY - start.y)), maxHeight))
     },
-    [resizing, position],
+    [position],
   )
 
   const onResizeEnd = useCallback((event: React.PointerEvent) => {
     event.currentTarget.releasePointerCapture(event.pointerId)
+    resizingRef.current = false
     setResizing(false)
   }, [])
 
@@ -187,10 +206,13 @@ export function useFloatingWindow<T extends HTMLElement>({ initialWidth, initial
     resizing,
     /** Volta a altura para automática — usado ao minimizar. */
     releaseHeight: useCallback(() => setHeight(null), []),
-    style: position
+    // Tipo anotado, e não inferido: sem isto os dois ramos viram uma união em
+    // que `height` só existe num deles, e quem consome não consegue perguntar
+    // se a altura já é explícita.
+    style: (position
       ? { left: position.x, top: position.y, width, ...(height !== null ? { height } : {}) }
       : // Enquanto a medida não aconteceu, fica invisível em vez de saltar.
-        { left: 0, top: 0, width, visibility: 'hidden' as const },
+        { left: 0, top: 0, width, visibility: 'hidden' }) as WindowStyle,
     handleProps: {
       onPointerDown: onDragStart,
       onPointerMove: onDragMove,

@@ -1,10 +1,14 @@
 import { Canvas } from '@react-three/fiber'
 import { Bloom, EffectComposer } from '@react-three/postprocessing'
 
+import { useSettingsStore } from '@/core/state/settingsStore'
 import { BrainPoints } from './head/BrainPoints'
 import { HeadPoints } from './head/HeadPoints'
+import { SpherePoints } from './sphere/SpherePoints'
 
 export function HologramScene() {
+  const avatarMode = useSettingsStore((s) => s.avatarMode)
+
   return (
     <Canvas
       dpr={[1, 2]}
@@ -13,8 +17,16 @@ export function HologramScene() {
       // Alpha ligado e sem clear color: o fundo é do DOM, e os anéis do HUD
       // ficam atrás do canvas.
     >
-      <BrainPoints />
-      <HeadPoints />
+      {/* Uma forma de cada vez. O cérebro pertence ao crânio: sem a cabeça
+          ele ficaria flutuando dentro da esfera, sem leitura nenhuma. */}
+      {avatarMode === 'human' ? (
+        <>
+          <BrainPoints />
+          <HeadPoints />
+        </>
+      ) : (
+        <SpherePoints />
+      )}
 
       <EffectComposer>
         <Bloom

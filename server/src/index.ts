@@ -8,7 +8,8 @@ import type { SttProvider } from './stt/types.js'
 import { EchoProvider, OpenAiProvider } from './llm/openai.js'
 import type { LlmProvider } from './llm/types.js'
 import { buildMessages, titleFrom } from './conversation/prompt.js'
-import { createStore, type ConversationStore } from './conversation/store.js'
+import { createStore, PrismaConversationStore, type ConversationStore } from './conversation/store.js'
+import { collectProbes, describeProbes } from './health/probes.js'
 import { RedisConversationStore } from './conversation/redisStore.js'
 import { TieredConversationStore } from './conversation/tiered.js'
 import { classifyTier, chatWithN8n } from './gateway/n8nChat.js'
@@ -40,6 +41,11 @@ let store: ConversationStore
 let tiered: TieredConversationStore | null = null
 let llm: LlmProvider
 let stt: SttProvider | null = null
+
+// Referências diretas para as sondas: o `store` pode ser a facade em níveis,
+// que esconde qual instância é qual — e sondar precisa falar com cada uma.
+let redisStore: RedisConversationStore | null = null
+let mongoStore: PrismaConversationStore | null = null
 
 /**
  * Raiz do servidor.
@@ -73,24 +79,28 @@ app.get('/', async (_request, reply) => {
 </main>`
 })
 
-app.get('/api/health', async () => ({
-  ok: true,
-  store: store.kind,
-  channel: hasN8n ? 'n8n' : 'direct',
-  voice: stt ? stt.name : 'desligado (WHISPER_MODEL ausente)',
-  classify: hasN8n ? (env.n8nClassifyWebhookUrl ? 'n8n' : 'disabled → stateless') : 'n/a',
-  memoryTiers: {
-    1: 'stateless',
-    2: hasRedis ? `redis · ttl ${env.redisTtlSeconds}s` : 'degraded → stateless (REDIS_URL ausente)',
-    3: hasDatabase ? 'mongo' : 'degraded → memória (DATABASE_URL ausente)',
-  },
-  // Deixa explícito o que está faltando, para o diagnóstico não exigir ler log.
-  warnings: [
-    hasDatabase ? null : 'DATABASE_URL ausente — histórico só em memória',
-    hasModel ? null : 'OPENAI_API_KEY ausente — respostas de eco',
-    hasRedis ? null : 'REDIS_URL ausente — nível 2 degradado para stateless',
-  ].filter(Boolean),
-}))
+/**
+ * Estado do sistema, medido e não deduzido da configuração.
+ *
+ * A versão anterior lia variáveis de ambiente e afirmava que tudo ia bem
+ * enquanto o Redis estava morto. Agora cada dependência é perguntada — e
+ * `ok` só é verdadeiro quando nada configurado está fora do ar. Ausência
+ * deliberada (`disabled`) não conta como falha.
+ */
+app.get('/api/health', async () => {
+  const probes = await collectProbes({ redis: redisStore, mongo: mongoStore })
+  const offline = probes.filter((p) => p.status === 'offline')
+
+  return {
+    ok: offline.length === 0,
+    store: store.kind,
+    channel: hasN8n ? 'n8n' : 'direct',
+    probes,
+    // Só o que está genuinamente quebrado: uma lista que sempre tem itens
+    // deixa de ser lida.
+    warnings: offline.map((p) => `${p.label}: ${p.detail}`),
+  }
+})
 
 /**
  * Turno de conversa, em Server-Sent Events.
@@ -170,7 +180,11 @@ async function runDirectTurn(input: {
   send('status', { label: 'Consultando modelo' })
 
   let answer = ''
-  for await (const chunk of llm.stream(buildMessages(history, text), signal)) {
+  // As sondas ficam em cache por alguns segundos, então anexar o estado a cada
+  // turno não vira carga sobre as dependências.
+  const systemState = describeProbes(await collectProbes({ redis: redisStore, mongo: mongoStore }))
+
+  for await (const chunk of llm.stream(buildMessages(history, text, systemState), signal)) {
     answer += chunk
     send('token', { text: chunk })
   }
@@ -240,7 +254,16 @@ async function runN8nTurn(input: {
 
   try {
     for await (const frame of chatWithN8n(
-      { conversationId: tier ? conversationId ?? null : null, tier, userText: text, history },
+      {
+        conversationId: tier ? conversationId ?? null : null,
+        tier,
+        userText: text,
+        history,
+        // O workflow não tem como sondar nada: quem enxerga Redis, Mongo e
+        // whisper é este processo. Vai no payload para o Agent do n8n poder
+        // responder sobre o estado sem inventar.
+        systemState: describeProbes(await collectProbes({ redis: redisStore, mongo: mongoStore })),
+      },
       signal,
     )) {
       if (signal.aborted || finished || failed) break
@@ -273,6 +296,8 @@ async function runN8nTurn(input: {
           finished = true
           break
         case 'error':
+          // O registro de saúde do canal fica em `chatWithN8n`, que enxerga
+          // o stream inteiro — duplicar aqui daria duas fontes de verdade.
           failed = true
           send('error', { message: String(data.message ?? 'Falha no canal n8n.') })
           break
@@ -325,12 +350,14 @@ async function listenWithRetry(attempts = 12, delayMs = 400): Promise<void> {
 async function main() {
   const legacyStore = await createStore(env.databaseUrl)
 
+  // As sondas precisam da instância concreta, não da interface: só o cliente
+  // do Redis sabe se está conectado, e só o do Prisma sabe responder a um ping.
+  if (legacyStore instanceof PrismaConversationStore) mongoStore = legacyStore
+
   if (hasN8n) {
     store = legacyStore
-    tiered = new TieredConversationStore(
-      hasRedis ? new RedisConversationStore(env.redisUrl!, env.redisTtlSeconds) : null,
-      legacyStore,
-    )
+    redisStore = hasRedis ? new RedisConversationStore(env.redisUrl!, env.redisTtlSeconds) : null
+    tiered = new TieredConversationStore(redisStore, legacyStore)
   } else {
     store = legacyStore
   }

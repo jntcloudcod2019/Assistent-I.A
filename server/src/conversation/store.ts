@@ -111,6 +111,7 @@ interface PrismaLike {
       }>
     >
   }
+  $runCommandRaw(command: Record<string, unknown>): Promise<unknown>
   $disconnect(): Promise<void>
 }
 
@@ -118,6 +119,22 @@ export class PrismaConversationStore implements ConversationStore {
   readonly kind = 'mongo' as const
 
   constructor(private prisma: PrismaLike) {}
+
+  /**
+   * Liveness de verdade: pergunta ao banco em vez de olhar a configuração.
+   *
+   * Diferente do Redis, que mantém estado de conexão observável por evento, o
+   * cliente do Prisma abre conexão sob demanda — só um comando responde se o
+   * banco está mesmo lá.
+   */
+  async ping(): Promise<boolean> {
+    try {
+      await this.prisma.$runCommandRaw({ ping: 1 })
+      return true
+    } catch {
+      return false
+    }
+  }
 
   async createConversation(title: string): Promise<string> {
     const created = await this.prisma.conversation.create({ data: { title } })

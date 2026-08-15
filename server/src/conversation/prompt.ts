@@ -29,11 +29,39 @@ Você conversa; não executa ações no computador ainda.`
  */
 const HISTORY_LIMIT = 20
 
-export function buildMessages(history: StoredMessage[], userText: string): ChatMessage[] {
+/**
+ * Estado do sistema anexado ao prompt.
+ *
+ * Sem isto, perguntar "como está a conexão com o banco?" produz uma resposta
+ * plausível e inventada — um modelo sem informação sobre si mesmo não hesita,
+ * ele preenche a lacuna. Anexar o resultado das sondas é o que troca palpite
+ * por fato.
+ *
+ * Vai no fim do bloco de sistema e não como mensagem separada: é contexto
+ * sobre quem responde, não algo que alguém disse na conversa.
+ */
+function systemBlock(systemState?: string): string {
+  if (!systemState) return SYSTEM_PROMPT
+
+  return `${SYSTEM_PROMPT}
+
+ESTADO ATUAL DOS SEUS SISTEMAS (medido agora, não suponha nada além disto):
+${systemState}
+
+Quando perguntarem sobre conexão, banco de dados, memória ou serviços, responda
+com base nesta lista. Se algo estiver fora do ar, diga o que é e o efeito
+prático — sem jargão de infraestrutura.`
+}
+
+export function buildMessages(
+  history: StoredMessage[],
+  userText: string,
+  systemState?: string,
+): ChatMessage[] {
   const recent = history.slice(-HISTORY_LIMIT)
 
   return [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemBlock(systemState) },
     ...recent.map((m) => ({
       role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
       content: m.content,

@@ -17,8 +17,31 @@ import { isSpeechSupported, speak, stopSpeaking } from '@/core/speech/speak'
  * 2. A fala começa quando o stream TERMINA, não a cada token. Falar token a
  *    token produz gagueira, porque a síntese reinicia a cada fragmento.
  */
+/**
+ * Espera antes de avisar que está processando.
+ *
+ * Medido: o turno típico leva 1,8–1,9 s, com picos ocasionais de 18 s. Avisar
+ * de imediato atropelaria a maioria das respostas — ALAN estaria pedindo para
+ * esperar quando a resposta já chegou. 1,2 s deixa passar em silêncio tudo que
+ * é rápido e cobre justamente os casos em que a espera incomoda.
+ */
+const FILLER_DELAY_MS = 1_200
+
+/**
+ * Falas de espera, curtas de propósito.
+ *
+ * "Aguarde enquanto processo a solicitação" leva ~2,5 s falada — mais que o
+ * turno inteiro no caso típico, e ALAN ainda estaria dizendo isso por cima da
+ * própria resposta. Estas ficam abaixo de 1 s. São várias porque ouvir sempre
+ * a mesma frase, várias vezes seguidas, soa mais robótico que o silêncio que
+ * ela veio resolver.
+ */
+const FILLERS = ['Um momento.', 'Deixa eu ver.', 'Só um instante.', 'Já respondo.']
+
 export function useConversation() {
   const abortRef = useRef<AbortController | null>(null)
+  /** Última frase usada, para não repetir duas vezes seguidas. */
+  const lastFillerRef = useRef(-1)
 
   useEffect(() => {
     useAlanStore.getState().setTtsSupported(isSpeechSupported())
@@ -54,6 +77,25 @@ export function useConversation() {
     let answer = ''
     let failed = false
 
+    // Fala de espera: agendada, não imediata. Se a resposta chegar antes do
+    // prazo, o timer é cancelado e ninguém ouve nada — que é o desejado na
+    // maioria dos turnos.
+    let fillerTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      fillerTimer = null
+      const index = (lastFillerRef.current + 1 + Math.floor(Math.random() * (FILLERS.length - 1))) % FILLERS.length
+      lastFillerRef.current = index
+      // `restorePhase: 'thinking'` porque o turno continua: sem isso o rosto
+      // voltaria a `idle` e pareceria ter terminado no meio do raciocínio.
+      void speak(FILLERS[index], { restorePhase: 'thinking' })
+    }, FILLER_DELAY_MS)
+
+    const cancelFiller = () => {
+      if (fillerTimer !== null) {
+        clearTimeout(fillerTimer)
+        fillerTimer = null
+      }
+    }
+
     try {
       for await (const event of httpAgent.send(text, controller.signal)) {
         switch (event.type) {
@@ -61,6 +103,8 @@ export function useConversation() {
             store.pushStep(event.label)
             break
           case 'token':
+            // O primeiro token é o sinal de que a espera acabou.
+            cancelFiller()
             answer += event.text
             store.appendToMessage(messageId, event.text)
             break
@@ -84,8 +128,14 @@ export function useConversation() {
       failed = true
       void error
     } finally {
+      cancelFiller()
       abortRef.current = null
     }
+
+    // A fala de espera pode ainda estar no ar quando a resposta fica pronta.
+    // Cortá-la é melhor que enfileirar: esperar ela terminar adiaria a
+    // resposta de verdade, que é justamente o que este recurso queria evitar.
+    stopSpeaking()
 
     if (controller.signal.aborted) {
       store.setPhase('idle')
