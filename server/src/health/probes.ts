@@ -180,11 +180,14 @@ export async function collectProbes(deps: ProbeDeps): Promise<Probe[]> {
       latencyMs: classify.latencyMs,
     })
   } else {
+    // Sem classificador não significa sem memória: o nível passou a ser
+    // escolhido por quem abre a conversa. O texto precisa dizer isso, senão o
+    // ALAN lê "desligado" e relata como se algo faltasse.
     probes.push({
       id: 'n8n-classify',
       label: 'Classificação de memória',
       status: 'disabled',
-      detail: 'Sem N8N_CLASSIFY_WEBHOOK_URL — toda conversa é stateless.',
+      detail: 'Não é usada: o nível é escolhido ao abrir a conversa, na janela do ALAN.',
     })
   }
 

@@ -5,12 +5,14 @@ import { ConsoleWindow } from '@/components/ui/ConsoleWindow'
 import { Dock, type DockItem } from '@/components/ui/Dock'
 import { SettingsPanel } from '@/components/ui/SettingsPanel'
 import { StatusPanel } from '@/components/ui/StatusPanel'
+import { PlanDashboard } from '@/components/ui/PlanDashboard'
 import { RING_SIZE } from '@/core/ui/layout'
 import { HologramScene } from './three/HologramScene'
 
 export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
+  const [planOpen, setPlanOpen] = useState(false)
 
   const dockItems: DockItem[] = [
     {
@@ -21,6 +23,7 @@ export function App() {
       // cheia, e empilhá-las esconderia a de baixo sem nenhum ganho.
       onClick: () => {
         setStatusOpen(false)
+        setPlanOpen(false)
         setSettingsOpen((open) => !open)
       },
       icon: (
@@ -36,12 +39,31 @@ export function App() {
       active: statusOpen,
       onClick: () => {
         setSettingsOpen(false)
+        setPlanOpen(false)
         setStatusOpen((open) => !open)
       },
       icon: (
         // Um traçado de monitor cardíaco: diz "sinais vitais" sem legenda.
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.5}>
           <path d="M2.5 12h4l2-5 3.5 10 2.5-6.5 1.6 3.5h5.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      id: 'plan',
+      label: 'Compromissos',
+      active: planOpen,
+      onClick: () => {
+        setSettingsOpen(false)
+        setStatusOpen(false)
+        setPlanOpen((open) => !open)
+      },
+      icon: (
+        // Alvo com flecha: objetivo com progresso, e não "lista de tarefas".
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <circle cx="12" cy="12" r="8.5" />
+          <circle cx="12" cy="12" r="4.5" />
+          <circle cx="12" cy="12" r="1" fill="currentColor" />
         </svg>
       ),
     },
@@ -71,6 +93,7 @@ export function App() {
 
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {statusOpen && <StatusPanel onClose={() => setStatusOpen(false)} />}
+      {planOpen && <PlanDashboard onClose={() => setPlanOpen(false)} />}
     </div>
   )
 }

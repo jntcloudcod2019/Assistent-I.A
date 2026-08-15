@@ -12,7 +12,8 @@ import { createStore, PrismaConversationStore, type ConversationStore } from './
 import { collectProbes, describeProbes } from './health/probes.js'
 import { RedisConversationStore } from './conversation/redisStore.js'
 import { TieredConversationStore } from './conversation/tiered.js'
-import { classifyTier, chatWithN8n } from './gateway/n8nChat.js'
+import { toTier, type ConversationTier } from './conversation/tiers.js'
+import { chatWithN8n } from './gateway/n8nChat.js'
 
 /**
  * Servidor do ALAN.
@@ -31,6 +32,14 @@ import { classifyTier, chatWithN8n } from './gateway/n8nChat.js'
 interface ChatBody {
   text?: string
   conversationId?: string
+  /**
+   * Nível de memória escolhido ao abrir a conversa (1, 2 ou 3).
+   *
+   * Só é lido no primeiro turno: a partir daí o nível vive no prefixo do
+   * `conversationId` e `resolveTier` o deduz de lá. Valor inválido vira `null`
+   * em `toTier`, e a conversa segue stateless em vez de quebrar.
+   */
+  tier?: unknown
 }
 
 type Send = (event: string, data: unknown) => void
@@ -145,7 +154,13 @@ app.post('/api/chat', async (request, reply) => {
 
   try {
     if (tiered) {
-      await runN8nTurn({ text, conversationId: body.conversationId, send, signal: controller.signal })
+      await runN8nTurn({
+        text,
+        conversationId: body.conversationId,
+        tier: toTier(body.tier) ?? undefined,
+        send,
+        signal: controller.signal,
+      })
     } else {
       await runDirectTurn({ text, conversationId: body.conversationId, send, signal: controller.signal })
     }
@@ -216,6 +231,8 @@ async function runDirectTurn(input: {
 async function runN8nTurn(input: {
   text: string
   conversationId?: string
+  /** Nível escolhido ao abrir a conversa. Só vale no primeiro turno. */
+  tier?: ConversationTier
   send: Send
   signal: AbortSignal
 }): Promise<void> {
@@ -228,17 +245,13 @@ async function runN8nTurn(input: {
   // armazenado. Nível nunca rebaixa: id `l1-`/`l2-` pode subir e ganhar
   // storage; id do MongoDB é permanente.
   let tier = await tiered!.resolveTier(conversationId)
-  if (tier === null) {
-    send('status', { label: 'Classificando conversa' })
-    const classified = await classifyTier(text)
-    if (classified) {
-      tier = classified
-      conversationId = await tiered!.createFor(tier, titleFrom(text))
-      if (tier >= 2 && conversationId) {
-        await tiered!.appendFor(tier, conversationId, { role: 'user', content: text })
-      }
-      idCreated = true
-    }
+  if (tier === null && input.tier) {
+    // Nível escolhido por quem abriu a conversa. Antes isto era decidido por um
+    // classificador no n8n; agora quem decide é a pessoa, uma vez, e o nível
+    // gruda no prefixo do id a partir daqui.
+    tier = input.tier
+    conversationId = await tiered!.createFor(tier, titleFrom(text))
+    idCreated = true
   }
 
   if (idCreated) {
@@ -246,7 +259,21 @@ async function runN8nTurn(input: {
   }
 
   send('status', { label: tier ? 'Recuperando contexto' : 'Sem contexto (conversa stateless)' })
+
+  // A ORDEM aqui é o que faz a memória funcionar, e ela é fácil de errar:
+  //
+  // 1. Ler o histórico ANTES de gravar a mensagem atual. Invertido, o histórico
+  //    já conteria a pergunta que também vai em `userText`, e o modelo a leria
+  //    duas vezes.
+  // 2. Gravar a mensagem do usuário em TODO turno, e não só na criação da
+  //    conversa. Preso ao `idCreated`, só a primeira pergunta era guardada e o
+  //    histórico virava [usuário₁, ALAN₁, ALAN₂, …] — um diálogo em que só um
+  //    dos lados é lembrado, pior que memória nenhuma.
   const history = tier ? await tiered!.historyFor(tier, conversationId!) : []
+
+  if (tier && tier >= 2 && conversationId) {
+    await tiered!.appendFor(tier, conversationId, { role: 'user', content: text })
+  }
 
   let answer = ''
   let finished = false

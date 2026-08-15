@@ -56,15 +56,40 @@ async function* parseSse(response: Response, signal: AbortSignal): AsyncIterable
   }
 }
 
+/**
+ * Onde a conversa é guardada.
+ *
+ * Nomeado pelo efeito e não pelo número: quem escolhe decide entre "some ao
+ * fechar", "dura um dia" e "fica para sempre" — `nível 2` é vocabulário do
+ * servidor, não de quem conversa. A tradução para 1/2/3 acontece na borda.
+ */
+export type MemoryLevel = 'ephemeral' | 'day' | 'permanent'
+
+const TIER_OF: Record<MemoryLevel, 1 | 2 | 3> = {
+  ephemeral: 1,
+  day: 2,
+  permanent: 3,
+}
+
 export class HttpAgent implements AgentClient {
   /** Mantida entre turnos: é ela que dá memória à conversa. */
   private conversationId: string | null = null
 
+  /**
+   * Nível da conversa aberta.
+   *
+   * Enviado em todo turno, mas o servidor só o consulta quando ainda não há
+   * `conversationId` — depois disso o nível vive no prefixo do id. Mandar
+   * sempre evita um estado a mais aqui para lembrar se já foi enviado.
+   */
+  private level: MemoryLevel = 'day'
+
   constructor(private endpoint = '/api/chat') {}
 
-  /** Descarta o contexto e começa uma conversa nova. */
-  reset() {
+  /** Descarta o contexto e começa uma conversa nova no nível indicado. */
+  reset(level: MemoryLevel = 'day') {
     this.conversationId = null
+    this.level = level
   }
 
   /**
@@ -76,6 +101,8 @@ export class HttpAgent implements AgentClient {
    */
   resume(conversationId: string | null) {
     this.conversationId = conversationId
+    // O nível da conversa retomada já está no prefixo do id; o servidor o
+    // deduz de lá e ignora o que mandarmos.
   }
 
   /** Id atual, para a sessão guardar junto com as mensagens. */
@@ -89,7 +116,11 @@ export class HttpAgent implements AgentClient {
       response = await fetch(this.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: prompt, conversationId: this.conversationId }),
+        body: JSON.stringify({
+          text: prompt,
+          conversationId: this.conversationId,
+          tier: TIER_OF[this.level],
+        }),
         signal,
       })
     } catch (error) {

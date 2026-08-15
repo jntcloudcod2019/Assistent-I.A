@@ -28,28 +28,64 @@ const MAX_ATTEMPTS = 3
 const RETRY_DELAY_MS = 700
 
 /**
- * A falha vale uma segunda tentativa?
+ * A falha vale uma segunda tentativa **imediata**?
  *
- * Na camada gratuita do Gemini, o modelo mais novo é o mais disputado e devolve
- * 503 "high demand" com frequência — foi 2 em 4 turnos num teste. Isso não é
- * defeito da configuração nem erro de quem perguntou: é fila do provedor, e
- * some sozinho na tentativa seguinte.
+ * Só sobrecarga passageira entra: o 503 "high demand" da camada gratuita é fila
+ * do provedor, não erro de configuração, e costuma passar na tentativa
+ * seguinte — foi 2 em 4 turnos num teste, e o retry levou a 6 em 6.
  *
- * A lista é deliberadamente curta. Repetir um 404 de modelo inexistente ou um
- * 401 de credencial só atrasaria a mensagem de erro que a pessoa precisa ler.
+ * **Cota estourada (429) NÃO entra aqui**, ainda que pareça igual de longe.
+ * O Gemini devolve o tempo até liberar, e ele vem em dezenas de segundos:
+ * repetir em 700 ms não espera nada e ainda gasta mais uma requisição contra
+ * o mesmo limite, aprofundando o buraco. Nesse caso é melhor falhar rápido e
+ * dizer quanto falta.
  */
-function isTransient(message: string): boolean {
+function isOverloaded(message: string): boolean {
   const m = message.toLowerCase()
   return (
     m.includes('503') ||
     m.includes('overloaded') ||
     m.includes('high demand') ||
     m.includes('unavailable') ||
-    m.includes('429') ||
-    m.includes('rate limit') ||
     m.includes('timeout') ||
     m.includes('etimedout')
   )
+}
+
+/**
+ * Traduz o erro cru do provedor para algo legível.
+ *
+ * O que chega é um bloco de JSON com links de documentação e nomes de métrica
+ * — útil para depurar, ilegível para quem só queria conversar, e impossível de
+ * ouvir em voz alta. A mensagem original continua no log do servidor.
+ */
+function humanize(message: string): string {
+  const m = message.toLowerCase()
+
+  if (m.includes('429') || m.includes('quota')) {
+    const wait = message.match(/retry in ([\d.]+)s/i)?.[1]
+    const segundos = wait ? Math.ceil(Number(wait)) : null
+    const limite = message.match(/limit:\s*(\d+)/i)?.[1]
+    return [
+      'A cota gratuita do modelo estourou.',
+      segundos ? `Ele libera em cerca de ${segundos} segundos.` : '',
+      limite ? `O limite deste modelo é de ${limite} requisições por minuto.` : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+  }
+
+  if (m.includes('no longer available')) {
+    return 'Este modelo foi descontinuado. Escolha outro no nó do n8n.'
+  }
+  if (m.includes('503') || m.includes('high demand')) {
+    return 'O modelo está congestionado agora. Tente de novo em instantes.'
+  }
+  if (m.includes('401') || m.includes('api key') || m.includes('permission')) {
+    return 'A credencial do modelo foi recusada. Confira a chave no n8n.'
+  }
+
+  return message
 }
 
 /**
@@ -247,7 +283,6 @@ export async function* chatWithN8n(
       // erro do modelo dentro do stream. Só quem vê todos os quadros sabe se
       // saiu resposta, e é por isso que o registro de saúde vive aqui e não em
       // quem consome — marcar sucesso ao fim do stream sobrescrevia a falha.
-      let failure: N8nFrame | null = null
       let failureText = ''
       let gotToken = false
 
@@ -257,8 +292,8 @@ export async function* chatWithN8n(
         if (frame.event === 'error') {
           // O erro é SEGURADO, não repassado na hora: se nenhum token saiu, o
           // turno ainda pode ser refeito, e entregar o erro agora fecharia
-          // essa porta. Só é emitido quando desistimos de vez.
-          failure = frame
+          // essa porta. O quadro original não é guardado porque não é ele que
+          // sai daqui — a mensagem é reescrita antes de chegar à tela.
           try {
             failureText = String((JSON.parse(frame.data) as { message?: unknown }).message ?? 'erro no workflow')
           } catch {
@@ -271,7 +306,7 @@ export async function* chatWithN8n(
         yield frame
       }
 
-      if (!failure) {
+      if (!failureText) {
         n8nHealth.lastOkAt = Date.now()
         return
       }
@@ -281,14 +316,18 @@ export async function* chatWithN8n(
       // tentativa; entregá-lo direto transformaria um soluço do provedor em
       // conversa perdida. Com token já entregue não há volta: repetir
       // duplicaria a metade que a pessoa leu.
-      if (isTransient(failureText) && !gotToken && attempt < MAX_ATTEMPTS) {
+      if (isOverloaded(failureText) && !gotToken && attempt < MAX_ATTEMPTS) {
         await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
         continue
       }
 
       n8nHealth.lastFailAt = Date.now()
-      n8nHealth.lastError = failureText.split('\n')[0].slice(0, 160)
-      yield failure
+      n8nHealth.lastError = humanize(failureText).split('\n')[0].slice(0, 160)
+
+      // O erro original vai para o log; para a tela e para a voz vai a versão
+      // legível — o bloco de JSON do provedor é impossível de ouvir.
+      console.warn(`[alan] turno falhou: ${failureText.split('\n')[0].slice(0, 200)}`)
+      yield { event: 'error', data: JSON.stringify({ message: humanize(failureText) }) }
       return
     } catch (error) {
       if (signal.aborted) return

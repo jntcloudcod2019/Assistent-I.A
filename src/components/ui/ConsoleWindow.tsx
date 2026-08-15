@@ -5,7 +5,7 @@ import { useAlanStore } from '@/core/state/alanStore'
 import { useSessionStore, searchSessions, relativeTime } from '@/core/state/sessionStore'
 import { useConversation } from '@/core/conversation/useConversation'
 import { useVoiceInput } from '@/core/speech/stt/useVoiceInput'
-import { httpAgent } from '@/core/agent/httpAgent'
+import { httpAgent, type MemoryLevel } from '@/core/agent/httpAgent'
 import { useFloatingWindow } from '@/core/ui/useFloatingWindow'
 
 /**
@@ -225,14 +225,15 @@ function SessionMenu({ onClose }: { onClose: () => void }) {
 
   const found = searchSessions(sessions, query)
 
-  const startNew = () => {
+  const startNew = (level: MemoryLevel) => {
     // Guardar antes de trocar: sem isto o que está na tela evapora.
     save(messages, httpAgent.currentConversationId)
     create()
     loadMessages([])
     // O servidor também precisa esquecer, senão a conversa "nova" nasceria
-    // carregando o contexto da anterior.
-    httpAgent.reset()
+    // carregando o contexto da anterior — e é aqui que o nível é definido,
+    // uma vez só, para valer pela conversa inteira.
+    httpAgent.reset(level)
     onClose()
   }
 
@@ -248,13 +249,6 @@ function SessionMenu({ onClose }: { onClose: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col border-b border-white/5">
       <div className="flex items-center gap-2 px-2.5 py-2">
-        <button
-          type="button"
-          onClick={startNew}
-          className="shrink-0 rounded-sm border border-holo-400/40 px-2.5 py-1.5 text-[10px] tracking-[0.18em] text-holo-200 uppercase transition-colors hover:bg-holo-400/10"
-        >
-          + Nova
-        </button>
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -263,6 +257,8 @@ function SessionMenu({ onClose }: { onClose: () => void }) {
           className="min-w-0 flex-1 bg-transparent text-[13px] text-holo-50 outline-none placeholder:text-holo-700"
         />
       </div>
+
+      <NewConversation onStart={startNew} />
 
       <ul className="flex-1 overflow-y-auto border-t border-white/5">
         {found.length === 0 && (
@@ -301,6 +297,52 @@ function SessionMenu({ onClose }: { onClose: () => void }) {
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+/**
+ * Escolha do nível de memória ao abrir uma conversa.
+ *
+ * Três botões em vez de um "+ Nova": onde a conversa vai morar é decidido uma
+ * vez, no começo, e vale para ela inteira. Perguntar a cada mensagem
+ * triplicaria o turno falado; não perguntar nunca esconderia que existe
+ * diferença entre desabafar e pedir para lembrar.
+ *
+ * Rotulados pelo efeito — "24 horas", e não "nível 2". O número é vocabulário
+ * do servidor; quem conversa pensa em quanto tempo aquilo dura.
+ */
+const LEVELS: { level: MemoryLevel; label: string; hint: string }[] = [
+  { level: 'ephemeral', label: 'Efêmera', hint: 'Nada é guardado' },
+  { level: 'day', label: '24 horas', hint: 'Expira sozinha' },
+  { level: 'permanent', label: 'Permanente', hint: 'Fica salva' },
+]
+
+function NewConversation({ onStart }: { onStart: (level: MemoryLevel) => void }) {
+  return (
+    <div className="border-t border-white/5 px-2.5 py-2">
+      <p className="hud-label mb-1.5">Nova conversa · onde ela mora</p>
+      <div className="grid grid-cols-3 gap-1.5">
+        {LEVELS.map(({ level, label, hint }) => (
+          <button
+            key={level}
+            type="button"
+            onClick={() => onStart(level)}
+            title={hint}
+            className={clsx(
+              'rounded-sm border px-1.5 py-1.5 text-center transition-colors',
+              // O padrão ganha destaque em vez de vir pré-selecionado: são três
+              // ações, não um formulário — não há o que confirmar depois.
+              level === 'day'
+                ? 'border-holo-400/50 bg-holo-400/[0.07] hover:bg-holo-400/15'
+                : 'border-white/10 hover:border-holo-400/30 hover:bg-white/[0.03]',
+            )}
+          >
+            <span className="block text-[11px] text-holo-50">{label}</span>
+            <span className="hud-label mt-0.5 block">{hint}</span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
