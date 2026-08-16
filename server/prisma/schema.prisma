@@ -51,3 +51,121 @@ model Message {
   @@index([conversationId, timestamp])
   @@map("messages")
 }
+
+// ---------------------------------------------------------------------------
+// Busca de vagas
+// ---------------------------------------------------------------------------
+
+/// Dados do candidato, usados para preencher formulários e pontuar vagas.
+///
+/// Documento único (`singleton`), não uma coleção: existe um candidato. Um id
+/// fixo evita a pergunta "qual dos perfis é o atual" quando alguém editar de
+/// dois lugares.
+model CandidateProfile {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  /// Sempre "me" — garante linha única via índice.
+  slug      String   @unique
+  fullName  String
+  email     String
+  phone     String?
+  city      String?
+  linkedin  String?
+  portfolio String?
+  github    String?
+
+  /// CPF e afins. Separado do resto porque é dado sensível sob a LGPD: manter
+  /// num campo próprio permite cifrar ou expurgar sem tocar no perfil inteiro.
+  sensitive Json?
+
+  /// Piso salarial por regime, em reais. Ex.: { "clt": 12000, "pj": 18000 }
+  salaryFloor Json?
+
+  /// Respostas prontas para as perguntas que se repetem em todo formulário.
+  answers   Json?
+  updatedAt DateTime @updatedAt
+
+  @@map("candidate_profile")
+}
+
+/// Uma vaga encontrada. Independe de ter havido candidatura.
+model Job {
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  /// De onde veio: 'linkedin' | 'gupy' | 'indeed' | 'email' | 'manual'…
+  source   String
+  /// Id da vaga na origem. Com `source`, forma a chave de deduplicação — a
+  /// mesma vaga chega por vários canais e não pode virar três candidaturas.
+  sourceId String
+  url      String
+
+  title       String
+  company     String
+  location    String?
+  /// 'remoto' | 'hibrido' | 'presencial'
+  workMode    String?
+  /// 'pleno' | 'senior' | 'outro' — o filtro que o Jonathan pediu.
+  seniority   String?
+  salaryText  String?
+  description String?
+
+  /// Nota de 0 a 100 dada pelo ALAN contra o perfil, com a justificativa.
+  /// Guardar o motivo importa: nota sem explicação não ajuda a decidir.
+  score       Int?
+  scoreReason String?
+
+  postedAt    DateTime?
+  collectedAt DateTime  @default(now())
+
+  application Application?
+
+  /// Deduplicação na origem.
+  @@unique([source, sourceId])
+  /// A consulta do painel: melhores vagas ainda não vistas, mais recentes primeiro.
+  @@index([score, collectedAt])
+  @@map("jobs")
+}
+
+/// Uma candidatura e seu processo seletivo.
+model Application {
+  id    String @id @default(auto()) @map("_id") @db.ObjectId
+  jobId String @unique @db.ObjectId
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  /// Funil: 'rascunho' | 'aguardando_envio' | 'enviada' | 'triagem' |
+  /// 'teste' | 'entrevista' | 'proposta' | 'recusada' | 'desistiu'
+  stage String
+
+  /// Carta de apresentação gerada pelo ALAN para esta vaga.
+  coverLetter String?
+  /// O que foi efetivamente preenchido no formulário — prova do que se enviou.
+  submitted   Json?
+
+  appliedAt DateTime?
+  updatedAt DateTime  @updatedAt
+  createdAt DateTime  @default(now())
+
+  events StageEvent[]
+
+  /// O painel lê por etapa, ordenado por atualização.
+  @@index([stage, updatedAt])
+  @@map("applications")
+}
+
+/// Cada mudança no processo seletivo, em ordem.
+///
+/// Histórico em coleção própria e não campo no `Application`: é o que permite
+/// responder "quanto tempo entre candidatura e resposta" depois, sem ter
+/// planejado a pergunta agora.
+model StageEvent {
+  id            String      @id @default(auto()) @map("_id") @db.ObjectId
+  applicationId String      @db.ObjectId
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  stage  String
+  note   String?
+  /// 'alan' | 'gmail' | 'manual' — quem detectou a mudança.
+  source String
+  at     DateTime @default(now())
+
+  @@index([applicationId, at])
+  @@map("stage_events")
+}

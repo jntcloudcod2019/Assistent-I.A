@@ -1,0 +1,148 @@
+{
+  "name": "alan/jobs-collect",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 3
+            }
+          ]
+        }
+      },
+      "id": "c011ec7-0001-4a10-9f01-alanjobstick",
+      "name": "A cada 3 horas",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://remotive.com/api/remote-jobs?category=software-dev&limit=100",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "c011ec7-0002-4a10-9f01-alanjobsremv",
+      "name": "Remotive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        -110
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://www.arbeitnow.com/api/job-board-api",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "c011ec7-0003-4a10-9f01-alanjobsarbn",
+      "name": "Arbeitnow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        110
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Normaliza fontes diferentes num formato só e pontua contra o perfil.\n//\n// A primeira versão usava booleano — \"bateu numa palavra, entra\" — e deixou\n// passar Frontend, Ruby on Rails e Applied AI. O motivo: numa descrição de\n// 4 mil caracteres, \"backend\" ou \"typescript\" aparece em quase toda vaga de\n// engenharia. Palavra solta em texto longo não é sinal.\n//\n// Agora cada indício vale pontos, e o TÍTULO pesa muito mais que o corpo:\n// o que a empresa põe no título é o que a vaga é; o resto é contexto.\n\n// Calibrado pelo currículo: 5 anos em mercado financeiro, C#/.NET com\n// arquitetura event-driven, mensageria e observabilidade.\nconst NUCLEO = /\\b(\\.net|dotnet|c#|csharp|asp\\.net|entity framework)\\b/i;\nconst ARQUITETURA = /\\b(microservi|micro-servi|event[- ]driven|ddd|cqrs|hexagonal|clean architecture)\\b/i;\nconst MENSAGERIA = /\\b(kafka|rabbitmq|sqs|service bus|event hub)\\b/i;\nconst DOMINIO = /\\b(fintech|payment|pagament|banking|banco|financial|trading|chargeback|risk|credit)\\b/i;\nconst NUVEM = /\\b(aws|azure|kubernetes|docker)\\b/i;\n\n// Stacks que EXCLUEM: se o título é de outra linguagem, a vaga não é dele por\n// mais que a descrição cite \".NET\" numa lista de \"diferenciais\".\nconst OUTRA_STACK = /\\b(ruby|rails|golang|\\bgo\\b|rust|scala|elixir|django|laravel|php|salesforce|sap|abap)\\b/i;\nconst NAO_ENGENHARIA = /\\b(recruit|sales|marketing|designer|support|assistant|writer|blog|newsletter|customer success|frontend|front[- ]end|mobile|ios|android|data scientist|ml engineer)\\b/i;\n\nconst JUNIOR = /\\b(junior|jr\\.?|intern|internship|trainee|apprentice|estági)\\b/i;\nconst SENIOR = /\\b(senior|sr\\.?|staff|principal|lead|architect|especialista)\\b/i;\nconst PLENO = /\\b(pleno|mid[- ]?level|mid[- ]?senior)\\b/i;\n\nfunction senioridade(titulo) {\n  if (JUNIOR.test(titulo)) return 'outro';\n  if (SENIOR.test(titulo)) return 'senior';\n  if (PLENO.test(titulo)) return 'pleno';\n  return 'pleno';\n}\n\nfunction limpar(html) {\n  return String(html || '').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 4000);\n}\n\n/** Pontua a aderência ao perfil. O corte exige mais que uma coincidência. */\nfunction pontuar(v) {\n  const t = v.title || '';\n  const d = v.description || '';\n\n  // Barreiras: nenhuma pontuação salva uma vaga de outra área.\n  if (NAO_ENGENHARIA.test(t)) return 0;\n  if (OUTRA_STACK.test(t) && !NUCLEO.test(t)) return 0;\n  if (!/\\b(engineer|developer|desenvolvedor|programador|engenheiro)\\b/i.test(t)) return 0;\n\n  let p = 0;\n  if (NUCLEO.test(t)) p += 60;        // .NET no título: é a vaga dele\n  else if (NUCLEO.test(d)) p += 25;   // só na descrição: pode ser \"diferencial\"\n  if (DOMINIO.test(t)) p += 15;\n  else if (DOMINIO.test(d)) p += 8;\n  if (ARQUITETURA.test(d)) p += 8;\n  if (MENSAGERIA.test(d)) p += 8;\n  if (NUVEM.test(d)) p += 4;\n  return p;\n}\n\n/** Abaixo disto não vale a chamada de pontuação do modelo. */\nconst CORTE = 30;\n\nconst vagas = [];\n\nfor (const item of $input.all()) {\n  const d = item.json;\n\n  for (const j of d.jobs || []) {\n    vagas.push({\n      source: 'remotive', sourceId: String(j.id), url: j.url, title: j.title,\n      company: j.company_name, location: j.candidate_required_location, workMode: 'remoto',\n      salaryText: j.salary || undefined, description: limpar(j.description),\n      postedAt: j.publication_date,\n    });\n  }\n\n  for (const j of d.data || []) {\n    vagas.push({\n      source: 'arbeitnow', sourceId: j.slug, url: j.url, title: j.title,\n      company: j.company_name, location: j.location,\n      workMode: j.remote ? 'remoto' : undefined, description: limpar(j.description),\n      postedAt: j.created_at ? new Date(j.created_at * 1000).toISOString() : undefined,\n    });\n  }\n}\n\nconst aprovadas = [];\nfor (const v of vagas) {\n  const p = pontuar(v);\n  if (p < CORTE) continue;\n  v.seniority = senioridade(v.title);\n  if (v.seniority !== 'pleno' && v.seniority !== 'senior') continue;\n  // Nota de triagem, não a do ALAN: ele repontua depois com o currículo inteiro.\n  v.preScore = p;\n  aprovadas.push(v);\n}\n\naprovadas.sort((a, b) => b.preScore - a.preScore);\n\nreturn [{ json: { jobs: aprovadas, coletadas: vagas.length, aproveitadas: aprovadas.length } }];"
+      },
+      "id": "c011ec7-0004-4a10-9f01-alanjobsnorm",
+      "name": "Normalizar e filtrar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:3001/api/jobs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jobs: $json.jobs }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "c011ec7-0005-4a10-9f01-alanjobspost",
+      "name": "Enviar ao ALAN",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "A cada 3 horas": {
+      "main": [
+        [
+          {
+            "node": "Remotive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Arbeitnow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remotive": {
+      "main": [
+        [
+          {
+            "node": "Normalizar e filtrar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Arbeitnow": {
+      "main": [
+        [
+          {
+            "node": "Normalizar e filtrar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar e filtrar": {
+      "main": [
+        [
+          {
+            "node": "Enviar ao ALAN",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

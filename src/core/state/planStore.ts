@@ -22,6 +22,8 @@ interface PlanState {
   toggleStep: (planId: string, stepId: string) => void
   /** Recomeça o plano a partir de hoje, zerando o progresso. */
   restart: (planId: string) => void
+  /** Registra que o lembrete de hoje já disparou. */
+  markReminderFired: (planId: string) => void
 }
 
 export const usePlanStore = create<PlanState>()(
@@ -47,6 +49,21 @@ export const usePlanStore = create<PlanState>()(
                 },
           ),
         })),
+
+      markReminderFired: (planId) =>
+        set((state) => {
+          // Data local, não timestamp: a pergunta é "já avisei HOJE?", e
+          // comparar o dia responde isso sem aritmética de fuso.
+          const now = new Date()
+          const pad = (n: number) => String(n).padStart(2, '0')
+          const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+
+          return {
+            plans: state.plans.map((plan) =>
+              plan.id !== planId ? plan : { ...plan, reminder: { ...plan.reminder, lastFiredOn: today } },
+            ),
+          }
+        }),
 
       restart: (planId) =>
         set((state) => ({

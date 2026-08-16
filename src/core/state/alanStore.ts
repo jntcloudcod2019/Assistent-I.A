@@ -48,6 +48,8 @@ interface AlanState {
   setTtsSupported: (supported: boolean) => void
 
   addUserMessage: (text: string) => string
+  /** Aviso do próprio ALAN, sem turno de conversa por trás (lembretes). */
+  addAlanNotice: (text: string) => string
   /** Substitui a conversa inteira — usado ao abrir uma sessão salva. */
   loadMessages: (messages: Message[]) => void
   startAlanMessage: () => string
@@ -107,6 +109,14 @@ export const useAlanStore = create<AlanState>((set) => ({
       messages: [...s.messages, { id, role: 'user', text, ts: Date.now() }],
       interim: '',
     }))
+    return id
+  },
+
+  // Entra como mensagem pronta, e não em streaming: não houve turno, então
+  // marcar `streaming` deixaria o cursor piscando para sempre.
+  addAlanNotice: (text) => {
+    const id = uid('a')
+    set((s) => ({ messages: [...s.messages, { id, role: 'alan', text, ts: Date.now() }] }))
     return id
   },
 

@@ -10,6 +10,9 @@ import type { LlmProvider } from './llm/types.js'
 import { buildMessages, titleFrom } from './conversation/prompt.js'
 import { createStore, PrismaConversationStore, type ConversationStore } from './conversation/store.js'
 import { collectProbes, describeProbes } from './health/probes.js'
+import { JobStore } from './jobs/store.js'
+import { registerJobRoutes } from './jobs/routes.js'
+import { registerCollectRoutes } from './collect/routes.js'
 import { RedisConversationStore } from './conversation/redisStore.js'
 import { TieredConversationStore } from './conversation/tiered.js'
 import { toTier, type ConversationTier } from './conversation/tiers.js'
@@ -392,6 +395,16 @@ async function main() {
   llm = hasModel
     ? new OpenAiProvider(env.llmKey!, env.llmModel, env.llmBaseUrl)
     : new EchoProvider()
+
+  if (mongoStore) {
+    const { PrismaClient } = await import('@prisma/client')
+    const prisma = new PrismaClient({ datasources: { db: { url: env.databaseUrl! } } })
+    const jobStore = new JobStore(prisma)
+    registerJobRoutes(app, jobStore)
+    // A coleta por navegador acompanha as rotas de vaga: sem banco não há
+    // onde guardar o resultado, então não faz sentido existir sozinha.
+    registerCollectRoutes(app, jobStore)
+  }
 
   if (hasVoice) {
     stt = createWhisperCppProvider({

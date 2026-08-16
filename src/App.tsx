@@ -6,6 +6,8 @@ import { Dock, type DockItem } from '@/components/ui/Dock'
 import { SettingsPanel } from '@/components/ui/SettingsPanel'
 import { StatusPanel } from '@/components/ui/StatusPanel'
 import { PlanDashboard } from '@/components/ui/PlanDashboard'
+import { JobsPanel } from '@/components/ui/JobsPanel'
+import { useReminders } from '@/core/plan/useReminders'
 import { RING_SIZE } from '@/core/ui/layout'
 import { HologramScene } from './three/HologramScene'
 
@@ -13,6 +15,11 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
   const [planOpen, setPlanOpen] = useState(false)
+  const [jobsOpen, setJobsOpen] = useState(false)
+
+  // Lembretes diários dos planos: precisam viver acima dos painéis, senão só
+  // disparariam com o painel de compromissos aberto.
+  useReminders()
 
   const dockItems: DockItem[] = [
     {
@@ -23,7 +30,9 @@ export function App() {
       // cheia, e empilhá-las esconderia a de baixo sem nenhum ganho.
       onClick: () => {
         setStatusOpen(false)
+        setJobsOpen(false)
         setPlanOpen(false)
+        setJobsOpen(false)
         setSettingsOpen((open) => !open)
       },
       icon: (
@@ -39,6 +48,7 @@ export function App() {
       active: statusOpen,
       onClick: () => {
         setSettingsOpen(false)
+        setJobsOpen(false)
         setPlanOpen(false)
         setStatusOpen((open) => !open)
       },
@@ -64,6 +74,24 @@ export function App() {
           <circle cx="12" cy="12" r="8.5" />
           <circle cx="12" cy="12" r="4.5" />
           <circle cx="12" cy="12" r="1" fill="currentColor" />
+        </svg>
+      ),
+    },
+    {
+      id: 'jobs',
+      label: 'Processos seletivos',
+      active: jobsOpen,
+      onClick: () => {
+        setSettingsOpen(false)
+        setStatusOpen(false)
+        setPlanOpen(false)
+        setJobsOpen((open) => !open)
+      },
+      icon: (
+        // Pasta com marca: candidatura arquivada, não "tarefa".
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.2h9A1.5 1.5 0 0 1 21 9.7v8.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" strokeLinejoin="round" />
+          <path d="m9.5 13.8 2 2 3.5-3.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       ),
     },
@@ -94,6 +122,7 @@ export function App() {
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {statusOpen && <StatusPanel onClose={() => setStatusOpen(false)} />}
       {planOpen && <PlanDashboard onClose={() => setPlanOpen(false)} />}
+      {jobsOpen && <JobsPanel onClose={() => setJobsOpen(false)} />}
     </div>
   )
 }
