@@ -13,6 +13,8 @@ import { collectProbes, describeProbes } from './health/probes.js'
 import { JobStore } from './jobs/store.js'
 import { registerJobRoutes } from './jobs/routes.js'
 import { registerCollectRoutes } from './collect/routes.js'
+import { closeContext } from './collect/browser.js'
+import { jobProbes } from './jobs/probe.js'
 import { RedisConversationStore } from './conversation/redisStore.js'
 import { TieredConversationStore } from './conversation/tiered.js'
 import { toTier, type ConversationTier } from './conversation/tiers.js'
@@ -58,6 +60,10 @@ let stt: SttProvider | null = null
 // que esconde qual instância é qual — e sondar precisa falar com cada uma.
 let redisStore: RedisConversationStore | null = null
 let mongoStore: PrismaConversationStore | null = null
+// Escopo de módulo para a rota de health alcançar: o `/api/health` é
+// declarado antes do `main()`, então não pode depender de uma variável
+// local de lá.
+let jobStore: JobStore | null = null
 
 /**
  * Raiz do servidor.
@@ -100,7 +106,16 @@ app.get('/', async (_request, reply) => {
  * deliberada (`disabled`) não conta como falha.
  */
 app.get('/api/health', async () => {
-  const probes = await collectProbes({ redis: redisStore, mongo: mongoStore })
+  // A CÓPIA importa: `collectProbes` devolve o array que ele guarda em cache,
+  // e empurrar nele o mutaria — na consulta seguinte as sondas de vaga já
+  // estariam lá e seriam acrescentadas de novo, duplicando a cada chamada.
+  const probes = [...(await collectProbes({ redis: redisStore, mongo: mongoStore }))]
+
+  // O módulo de vagas só existe com banco; suas sondas entram depois das
+  // principais para o painel manter a leitura de cima para baixo — primeiro a
+  // infraestrutura, depois o que roda sobre ela.
+  if (jobStore) probes.push(...(await jobProbes(jobStore)))
+
   const offline = probes.filter((p) => p.status === 'offline')
 
   return {
@@ -399,7 +414,7 @@ async function main() {
   if (mongoStore) {
     const { PrismaClient } = await import('@prisma/client')
     const prisma = new PrismaClient({ datasources: { db: { url: env.databaseUrl! } } })
-    const jobStore = new JobStore(prisma)
+    jobStore = new JobStore(prisma)
     registerJobRoutes(app, jobStore)
     // A coleta por navegador acompanha as rotas de vaga: sem banco não há
     // onde guardar o resultado, então não faz sentido existir sozinha.
@@ -444,6 +459,11 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     await tiered?.close()
     // Sem isto o whisper-server fica órfão segurando 465 MB.
     await stt?.close()
+    // E sem isto o Chromium fica órfão segurando o lock do perfil em
+    // ~/.cache/alan/browser. Como o `tsx watch` reinicia a cada arquivo salvo,
+    // bastavam algumas edições para acumular navegadores travando o perfil e
+    // a coleta seguinte falhar sem motivo aparente.
+    await closeContext().catch(() => {})
     await app.close()
     process.exit(0)
   })
