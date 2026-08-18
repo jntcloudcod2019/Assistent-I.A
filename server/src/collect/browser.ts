@@ -34,8 +34,25 @@ export async function getContext(options: BrowserOptions = {}): Promise<BrowserC
     viewport: { width: 1280, height: 900 },
     locale: 'pt-BR',
     timezoneId: 'America/Sao_Paulo',
+    // Teto no arranque: sem ele, um perfil travado deixa a promessa pendurada
+    // para sempre e a coleta nunca reporta nada.
+    timeout: 30_000,
     // Sem `args` de furtividade de propósito. O que está aqui é só o que
     // qualquer navegador real teria.
+  })
+
+  /**
+   * Invalida o cache quando o navegador morre.
+   *
+   * ESTA linha é o que separa "falha visível" de "trava eterna". Sem ela, um
+   * Chromium encerrado por fora — `pkill`, crash, `tsx watch` reiniciando —
+   * deixava a referência morta no singleton. A chamada seguinte recebia o
+   * contexto em cache na hora, emitia os primeiros eventos de progresso como
+   * se tudo fosse bem, e travava no primeiro `goto` sem estourar timeout,
+   * porque não havia processo do outro lado para responder nem para recusar.
+   */
+  context.on('close', () => {
+    context = null
   })
 
   return context

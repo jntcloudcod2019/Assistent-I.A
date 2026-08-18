@@ -40,6 +40,26 @@ export interface CollectResult {
 }
 
 /**
+ * Progresso da coleta, relatado enquanto ela roda.
+ *
+ * A coleta leva minutos — seis buscas, três páginas cada, com pausa entre
+ * elas. Sem relato, a tela fica parada e não há como distinguir "trabalhando"
+ * de "travado", que são estados muito diferentes para quem espera.
+ *
+ * `step`/`total` são passos de página, e não de busca: é a menor unidade que
+ * avança de forma perceptível. Contar por busca faria a barra pular de 0 para
+ * 17% depois de um minuto parada.
+ */
+export type CollectProgress =
+  | { type: 'start'; total: number; queries: number }
+  | { type: 'query'; step: number; total: number; keywords: string }
+  | { type: 'page'; step: number; total: number; page: number; found: number; acumulado: number }
+  | { type: 'pause'; step: number; total: number; ms: number }
+  | { type: 'blocked'; note: string }
+
+export type OnProgress = (event: CollectProgress) => void
+
+/**
  * Extrai o id numérico da vaga a partir do link.
  *
  * O formato não é `/jobs/view/12345` como parece: é
@@ -71,7 +91,19 @@ export async function login(): Promise<boolean> {
   return openForLogin('https://www.linkedin.com/login', /linkedin\.com\/(feed|in|jobs)/, 300_000)
 }
 
-export async function collect(queries: SearchQuery[]): Promise<CollectResult> {
+export async function collect(
+  queries: SearchQuery[],
+  onProgress: OnProgress = () => {},
+  /**
+   * Desistência de quem pediu.
+   *
+   * Sem isto, fechar a aba ou cancelar a requisição deixava o navegador
+   * navegando por minutos — gastando páginas no LinkedIn para ninguém, e
+   * segurando a trava que impede a próxima coleta. É a mesma proteção que o
+   * turno de conversa já tem.
+   */
+  signal?: AbortSignal,
+): Promise<CollectResult> {
   const context = await getContext({ headless: true })
   const page = context.pages()[0] ?? (await context.newPage())
 
@@ -79,8 +111,19 @@ export async function collect(queries: SearchQuery[]): Promise<CollectResult> {
   const vistos = new Set<string>()
   let pages = 0
 
-  for (const query of queries) {
+  const total = queries.length * MAX_PAGES
+  onProgress({ type: 'start', total, queries: queries.length })
+
+  for (const [qi, query] of queries.entries()) {
+    onProgress({ type: 'query', step: qi * MAX_PAGES, total, keywords: query.keywords })
+
     for (let p = 0; p < MAX_PAGES; p++) {
+      // Conferido no topo de cada página: é a granularidade em que dá para
+      // parar sem deixar uma navegação pela metade.
+      if (signal?.aborted) {
+        return { jobs, pages, needsLogin: false, blocked: false, note: 'Coleta cancelada.' }
+      }
+
       try {
         await page.goto(buildUrl(query, p * PER_PAGE), { waitUntil: 'domcontentloaded', timeout: 45_000 })
       } catch (error) {
@@ -90,13 +133,9 @@ export async function collect(queries: SearchQuery[]): Promise<CollectResult> {
         // defeito do servidor — quando é o LinkedIn dizendo não.
         const message = error instanceof Error ? error.message : String(error)
         if (/authwall|checkpoint|interrupted by another navigation/i.test(message)) {
-          return {
-            jobs,
-            pages,
-            needsLogin: true,
-            blocked: true,
-            note: 'O LinkedIn interrompeu a navegação e exigiu autenticação (authwall).',
-          }
+          const note = 'O LinkedIn interrompeu a navegação e exigiu autenticação (authwall).'
+          onProgress({ type: 'blocked', note })
+          return { jobs, pages, needsLogin: true, blocked: true, note }
         }
         throw error
       }
@@ -107,16 +146,14 @@ export async function collect(queries: SearchQuery[]): Promise<CollectResult> {
       // Redirecionado para login: a sessão expirou. Parar aqui e avisar é o
       // certo — insistir sem sessão é o que gera bloqueio de verdade.
       if (/\/(login|uas\/login|checkpoint)/.test(url)) {
-        return { jobs, pages, needsLogin: true, blocked: false, note: 'Sessão expirou. Rode o login de novo.' }
+        const note = 'Sessão expirou. Rode o login de novo.'
+        onProgress({ type: 'blocked', note })
+        return { jobs, pages, needsLogin: true, blocked: false, note }
       }
       if (/authwall|challenge/.test(url)) {
-        return {
-          jobs,
-          pages,
-          needsLogin: false,
-          blocked: true,
-          note: 'O LinkedIn pediu verificação. A coleta parou — resolva no navegador antes de repetir.',
-        }
+        const note = 'O LinkedIn pediu verificação. A coleta parou — resolva no navegador antes de repetir.'
+        onProgress({ type: 'blocked', note })
+        return { jobs, pages, needsLogin: false, blocked: true, note }
       }
 
       // A lista tem dois formatos conforme a sessão; aceitar os dois evita a
@@ -135,13 +172,9 @@ export async function collect(queries: SearchQuery[]): Promise<CollectResult> {
           .count()
 
         if (temFormularioDeLogin > 0) {
-          return {
-            jobs,
-            pages,
-            needsLogin: true,
-            blocked: true,
-            note: 'O LinkedIn substituiu os resultados por um muro de cadastro. O acesso sem sessão foi cortado.',
-          }
+          const note = 'O LinkedIn substituiu os resultados por um muro de cadastro. O acesso sem sessão foi cortado.'
+          onProgress({ type: 'blocked', note })
+          return { jobs, pages, needsLogin: true, blocked: true, note }
         }
         break
       }
@@ -157,19 +190,26 @@ export async function collect(queries: SearchQuery[]): Promise<CollectResult> {
           if (!sourceId || vistos.has(sourceId)) continue
           vistos.add(sourceId)
 
-          const title = (await card.locator('a[href*="/jobs/view/"]').first().innerText()).trim()
+          // O `timeout` curto é OBRIGATÓRIO, não otimização. Um locator sem
+          // elemento correspondente espera o padrão do Playwright — 30
+          // segundos — antes de rejeitar, e o `.catch()` esconde a falha sem
+          // encurtar a espera. Com 25 cartões e duas buscas opcionais cada,
+          // isso é meia hora de travamento silencioso por página.
+          const title = (
+            await card.locator('a[href*="/jobs/view/"]').first().innerText({ timeout: 2_000 })
+          ).trim()
           const company = (
             await card
               .locator('.job-card-container__primary-description, .base-search-card__subtitle, .artdeco-entity-lockup__subtitle')
               .first()
-              .innerText()
+              .innerText({ timeout: 1_500 })
               .catch(() => '')
           ).trim()
           const location = (
             await card
               .locator('.job-card-container__metadata-item, .job-search-card__location')
               .first()
-              .innerText()
+              .innerText({ timeout: 1_500 })
               .catch(() => '')
           ).trim()
 
@@ -188,6 +228,19 @@ export async function collect(queries: SearchQuery[]): Promise<CollectResult> {
         }
       }
 
+      const step = qi * MAX_PAGES + p + 1
+      onProgress({
+        type: 'page',
+        step,
+        total,
+        page: p + 1,
+        found: cards.length,
+        acumulado: jobs.length,
+      })
+
+      // A pausa é anunciada porque ela domina o tempo: sem dizer que está
+      // esperando de propósito, os segundos parados leem como travamento.
+      onProgress({ type: 'pause', step, total, ms: 2_400 })
       await humanPause()
     }
   }

@@ -154,6 +154,31 @@ nuance; o contrato de resposta é o mesmo.
 
 ---
 
+## O workflow de vagas: `alan/jobs-collect`
+
+[alan-jobs-collect.workflow.json](alan-jobs-collect.workflow.json) — agenda a
+cada 3 h, busca em Remotive e Arbeitnow, normaliza, pontua por heurística e
+manda para `POST /api/jobs`. Importe e publique do mesmo jeito que os outros.
+
+**Leia isto antes de contar com ele.** Ele funciona, mas **não encontra vagas
+.NET**: essas duas APIs concentram startups de JS/Python e mercado alemão.
+Medido — 191 vagas, **zero** menções a .NET ou C#, nem em descrição. O mesmo
+vale para Jobicy, Himalayas, Greenhouse e Lever, testados depois.
+
+Ele fica no repositório por dois motivos: serve se você buscar Node/TypeScript
+um dia, e o nó de normalização é reaproveitável — trocar os dois nós de HTTP
+por um de Gmail mantém o resto igual.
+
+**Para vaga .NET brasileira**, a fonte é o LinkedIn, coletado pelo próprio
+servidor com Playwright (`POST /api/collect/linkedin`), não por este workflow.
+Ele exige sessão: use **Entrar no LinkedIn** no painel de processos seletivos.
+
+Uma armadilha que custou uma depuração: `preScore` é calculado no nó Code e
+**descartado** — nem `parseJob` o persiste, nem o schema tem o campo. A ideia
+era filtrar barato antes de gastar o modelo; falta ligar as pontas.
+
+---
+
 ## Por que o workflow de chat é stateless
 
 O corpo que o servidor envia é:

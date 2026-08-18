@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
 
-import { useJobs, STAGE_LABEL, STAGE_ORDER, type Job, type Stage } from '@/core/state/useJobs'
+import {
+  useJobs, STAGE_LABEL, STAGE_ORDER,
+  type CollectStep, type Job, type LogLine, type Stage,
+} from '@/core/state/useJobs'
 
 /**
  * Relatório dos processos seletivos.
@@ -12,9 +15,14 @@ import { useJobs, STAGE_LABEL, STAGE_ORDER, type Job, type Stage } from '@/core/
  * segunda sumir sob o volume da primeira.
  */
 export function JobsPanel({ onClose }: { onClose: () => void }) {
-  const { jobs, error, loading, refresh, advance, apply } = useJobs(true)
+  const {
+    jobs, error, loading, collecting, progress, log,
+    refresh, advance, apply, collect, linkedinLogin,
+  } = useJobs(true)
   const [view, setView] = useState<'funil' | 'novas'>('funil')
   const [openId, setOpenId] = useState<string | null>(null)
+  /** Resultado da última coleta — some ao iniciar outra. */
+  const [aviso, setAviso] = useState<string | null>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -64,7 +72,10 @@ export function JobsPanel({ onClose }: { onClose: () => void }) {
             <button
               type="button"
               onClick={() => void refresh()}
-              aria-label="Atualizar"
+              // O rótulo diz o que ele faz de verdade. "Atualizar" sozinho
+              // sugeria que ele sairia procurando vagas — não sai.
+              aria-label="Recarregar a lista"
+              title="Recarrega a lista do banco. Para procurar vagas novas, use Buscar vagas."
               className={clsx(
                 'grid h-6 w-6 place-items-center rounded-sm text-holo-700 transition-colors hover:text-holo-100',
                 loading && 'animate-pulse-soft',
@@ -88,7 +99,7 @@ export function JobsPanel({ onClose }: { onClose: () => void }) {
           </span>
         </header>
 
-        <div className="flex shrink-0 gap-1 border-b border-white/5 px-3 py-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/5 px-3 py-2">
           {(['funil', 'novas'] as const).map((v) => (
             <button
               key={v}
@@ -102,7 +113,45 @@ export function JobsPanel({ onClose }: { onClose: () => void }) {
               {v === 'funil' ? 'Funil' : `Vagas novas (${novas.length})`}
             </button>
           ))}
+
+          {/* Separado das abas e do "atualizar": este é o único que sai
+              procurando. Confundir os dois foi o que fez o painel parecer
+              quebrado — o de atualizar relê o banco em milissegundos, este
+              abre um navegador e navega por minutos. */}
+          <span className="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              disabled={collecting}
+              onClick={async () => {
+                setAviso(null)
+                setAviso(await collect())
+              }}
+              className={clsx(
+                'rounded-sm border px-2.5 py-1 text-[10px] tracking-[0.18em] uppercase transition-colors',
+                collecting
+                  ? 'animate-pulse-soft border-white/10 text-holo-700'
+                  : 'border-holo-400/40 text-holo-200 hover:bg-holo-400/10',
+              )}
+            >
+              {collecting ? 'Buscando…' : 'Buscar vagas'}
+            </button>
+            <button
+              type="button"
+              disabled={collecting}
+              onClick={async () => setAviso(await linkedinLogin())}
+              title="Abre o navegador para você entrar no LinkedIn. A senha não passa pelo servidor."
+              className="hud-label rounded-sm border border-white/10 px-2 py-1 transition-colors hover:border-holo-400/40 hover:text-holo-200"
+            >
+              Entrar no LinkedIn
+            </button>
+          </span>
         </div>
+
+        {aviso && !collecting && (
+          <p className="hud-label shrink-0 border-b border-white/5 px-3 py-1.5 text-holo-300">{aviso}</p>
+        )}
+
+        {(collecting || log.length > 0) && <Progresso progress={progress} log={log} ativo={collecting} />}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {error && <p className="text-[13px] leading-relaxed text-alert">{error}</p>}
@@ -119,6 +168,73 @@ export function JobsPanel({ onClose }: { onClose: () => void }) {
 }
 
 // — Camadas ————————————————————————————————————————————————
+
+/**
+ * Barra de progresso e registro da coleta.
+ *
+ * Três informações, e cada uma responde uma pergunta diferente de quem espera:
+ * a barra diz **quanto falta**, o rótulo diz **o que está acontecendo agora**,
+ * e o log diz **o que já aconteceu** — que é o único que sobrevive ao fim e
+ * permite entender depois por que veio pouca vaga.
+ *
+ * O log permanece visível após terminar, de propósito. Sumir junto com a barra
+ * apagaria justamente o registro que explica o resultado.
+ */
+function Progresso({
+  progress,
+  log,
+  ativo,
+}: {
+  progress: CollectStep | null
+  log: LogLine[]
+  ativo: boolean
+}) {
+  const pct = progress && progress.total > 0 ? (progress.step / progress.total) * 100 : null
+
+  return (
+    <section className="shrink-0 border-b border-white/5 px-3 py-2">
+      <span className="flex items-baseline justify-between gap-2">
+        <span className={clsx('hud-label', ativo && 'animate-pulse-soft')}>
+          {progress?.label ?? 'Coleta encerrada'}
+        </span>
+        {progress && progress.total > 0 && (
+          <span className="hud-label shrink-0">
+            {progress.step}/{progress.total}
+          </span>
+        )}
+      </span>
+
+      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/5">
+        <div
+          className={clsx(
+            'h-full rounded-full bg-holo-400 transition-[width] duration-500',
+            // Sem total conhecido a barra não pode fingir precisão: vira uma
+            // faixa pulsando, que comunica "trabalhando" sem inventar um
+            // percentual.
+            pct === null && 'w-1/4 animate-pulse-soft',
+          )}
+          style={pct === null ? undefined : { width: `${pct}%` }}
+        />
+      </div>
+
+      {log.length > 0 && (
+        <ol className="mt-2 max-h-24 space-y-0.5 overflow-y-auto">
+          {log.map((linha) => (
+            <li key={`${linha.at}-${linha.text}`} className="flex gap-2 text-[11px] leading-relaxed">
+              <span className="hud-label w-12 shrink-0">{hora(linha.at)}</span>
+              <span className="min-w-0 text-holo-700">{linha.text}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  )
+}
+
+function hora(ts: number): string {
+  const d = new Date(ts)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+}
 
 function Funil({
   porEtapa,

@@ -66,6 +66,83 @@ export function registerCollectRoutes(app: FastifyInstance, store: JobStore) {
     }
   })
 
+  /**
+   * Coleta com progresso em tempo real.
+   *
+   * SSE e não uma resposta única porque a coleta leva minutos: seis buscas,
+   * três páginas cada, com pausa deliberada entre elas. Com resposta única a
+   * tela ficava parada o tempo todo, e "trabalhando" era indistinguível de
+   * "travado" — que foi exatamente a reclamação.
+   *
+   * Mesmo formato do `/api/chat`, então o cliente reaproveita o leitor de SSE
+   * em vez de ganhar um terceiro parser.
+   */
+  app.post('/api/collect/linkedin/stream', async (request, reply) => {
+    if (running) {
+      return reply.code(409).send({ error: 'Já existe uma coleta em andamento.' })
+    }
+
+    const body = (request.body ?? {}) as { queries?: unknown }
+    const queries = Array.isArray(body.queries) && body.queries.length
+      ? (body.queries as SearchQuery[])
+      : DEFAULT_QUERIES
+
+    reply.hijack()
+    const raw = reply.raw
+    raw.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+    const send = (event: string, data: unknown) => {
+      raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+    }
+
+    // Cliente desistiu: aborta a coleta. Sem isto o navegador seguiria
+    // navegando por minutos para ninguém, gastando páginas no LinkedIn e
+    // segurando a trava que bloqueia a próxima tentativa.
+    const controller = new AbortController()
+    raw.on('close', () => controller.abort())
+
+    running = true
+    try {
+      const result = await collect(queries, (p) => send('progress', p), controller.signal)
+
+      if (result.needsLogin || result.blocked) {
+        send('error', {
+          message: result.note ?? 'A coleta foi interrompida.',
+          needsLogin: result.needsLogin,
+          blocked: result.blocked,
+        })
+        return
+      }
+
+      send('progress', { type: 'saving', total: 0, step: 0 })
+
+      const comSenioridade = result.jobs.map((j) => ({
+        ...j,
+        seniority: j.seniority ?? inferSeniority(j.title),
+      }))
+      const filtradas = comSenioridade.filter((j) => j.seniority === 'pleno' || j.seniority === 'senior')
+      const saved = await store.collect(filtradas)
+
+      send('done', {
+        ...saved,
+        paginas: result.pages,
+        buscas: queries.length,
+        descartadas: result.jobs.length - filtradas.length,
+      })
+    } catch (error) {
+      send('error', {
+        message: error instanceof Error ? error.message : 'A coleta falhou.',
+      })
+    } finally {
+      running = false
+      raw.end()
+    }
+  })
+
   app.post('/api/collect/linkedin', async (request, reply) => {
     if (running) return reply.code(409).send({ error: 'Já existe uma coleta em andamento.' })
 
